@@ -124,3 +124,31 @@ PL_COUNT     equ 0
 PL_CAP       equ 8
 PL_ITEMS     equ 16
 PL_SIZE      equ 24
+
+; ---- 0.2.0 -----------------------------------------------------------------
+K_BLANK      equ 9             ; Shift+Tab: black screen, keep playing
+K_FONT       equ 10            ; F: cycle fonts
+
+; track info published by the player thread to the UI thread
+INFO_TITLE   equ 0             ; UTF-8, 256 bytes
+INFO_ARTIST  equ 256           ; UTF-8, 256 bytes
+INFO_ART     equ 512           ; ART object or 0
+INFO_SIZE    equ 528
+
+; decoded cover art, reference counted (player + UI may both hold it)
+ART_REF      equ 0             ; dword
+ART_W        equ 4
+ART_H        equ 8
+ART_PX       equ 16            ; BGRX pixels
+ART_HASH     equ 24
+ART_LEN      equ 32
+ART_SIZE     equ 40
+
+; 5th argument as seen *inside* a FUNC (after its prologue)
+%ifdef WIN64
+    %define IN5 qword [rbp + 48]
+    %define IN6 qword [rbp + 56]
+%else
+    %define IN5 r8
+    %define IN6 r9
+%endif

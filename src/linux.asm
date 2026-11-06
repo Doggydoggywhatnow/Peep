@@ -10,6 +10,8 @@ default rel
 
 extern core_list_new, core_list_add, core_list_free, core_publish
 extern core_player, core_key, core_render, g_quit, g_ui
+extern core_take_info, core_target_size, core_note_size, core_art_aspect
+extern core_next_wake, core_click
 
 extern XOpenDisplay, XDefaultScreen, XRootWindow, XCreateSimpleWindow
 extern XStoreName, XSetClassHint, XSelectInput, XInternAtom, XSetWMProtocols
@@ -17,24 +19,29 @@ extern XChangeProperty, XMapWindow, XConnectionNumber, XPending, XNextEvent
 extern XLookupKeysym, XDefaultVisual, XDefaultDepth, XDefaultGC, XCreateImage
 extern XPutImage, XFlush, XSendEvent, XConvertSelection, XGetWindowProperty
 extern XFree, XCreateBitmapFromData, XCreatePixmapCursor, XDefineCursor
-extern XUndefineCursor
+extern XUndefineCursor, XResizeWindow, XSetWMNormalHints, XDisplayWidth
+extern XDisplayHeight
 extern snd_pcm_open, snd_pcm_set_params, snd_pcm_writei, snd_pcm_recover
 extern snd_pcm_drop, snd_pcm_prepare, snd_pcm_drain, snd_pcm_close
 extern malloc, free, open, close, lseek, mmap, munmap, opendir, readdir
 extern closedir, strlen, strcasecmp, usleep, pthread_create, poll, write, _exit
+extern pipe2, read, getenv, clock_gettime
 
 global main
 global plat_audio_open, plat_audio_write, plat_audio_flush, plat_audio_close
 global plat_map, plat_unmap, plat_sleep, plat_title, plat_cmp
+global plat_wake, plat_ms, plat_font_scan, plat_font_dir
 
 ; X11 constants
 KeyPress        equ 2
+ButtonPress     equ 4
 Expose          equ 12
 ConfigureNotify equ 22
 SelectionNotify equ 31
 ClientMessage   equ 33
 XA_ATOM         equ 4
-EV_MASK         equ (1<<15) | 1 | (1<<17)     ; Exposure | KeyPress | StructureNotify
+EV_MASK         equ (1<<15) | 1 | (1<<2) | (1<<17) ; Exposure|KeyPress|ButtonPress|StructureNotify
+START_SIZE      equ 480                        ; opens as a square
 SUBSTRUCT_MASK  equ (1<<19) | (1<<20)
 
 PATHMAX         equ 4096
@@ -65,6 +72,10 @@ s_title     db "Peep", 0
 s_class     db "Peep", 0
 s_name      db "peep", 0
 s_pcm       db "default", 0
+s_xdg       db "XDG_DATA_HOME", 0
+s_home      db "HOME", 0
+s_local     db "/.local/share", 0
+s_peepfonts db "/peep/fonts", 0
 s_nodisp    db "peep: cannot open X display", 10
 s_nodisp_l  equ $ - s_nodisp
 xdnd_ver    dq 5
@@ -116,6 +127,14 @@ gp_n        resq 1
 gp_after    resq 1
 gp_data     resq 1
 pathbuf     resb PATHMAX
+fontdir     resb PATHMAX
+wake_fd     resd 2
+wake_buf    resb 64
+pollfds     resq 2
+hints       resb 80
+art_asp         resd 2
+tsz         resd 2
+ts          resq 2
 
 section .text
 
@@ -148,8 +167,8 @@ FUNC main, 16
     mov  A2, [root]
     xor  A3, A3
     xor  A4, A4
-    mov  A5, 640
-    mov  A6, 400
+    mov  A5, START_SIZE
+    mov  A6, START_SIZE
     mov  qword SARG(7), 0
     mov  qword SARG(8), 0
     mov  qword SARG(9), 0
@@ -230,9 +249,13 @@ FUNC main, 16
     mov  A2d, [scr]
     call XDefaultGC
     mov  [gc], rax
-    mov  A1, 640
-    mov  A2, 400
+    mov  A1, START_SIZE
+    mov  A2, START_SIZE
     call fb_resize
+    ; a pipe the player thread pokes when a new track's info is ready
+    lea  A1, [wake_fd]
+    mov  A2, 0x80800                   ; O_CLOEXEC | O_NONBLOCK
+    call pipe2
     ; player thread
     lea  A1, [tid]
     xor  A2, A2
@@ -280,6 +303,12 @@ FUNC main, 16
 .idle:
     cmp  dword [g_quit], 0
     jne  .quit
+    call core_take_info                ; new track: maybe new art / size
+    test eax, eax
+    jz   .noinfo
+    call apply_size
+    mov  dword [dirty], 1
+.noinfo:
     cmp  dword [dirty], 0
     je   .wait
     mov  dword [dirty], 0
@@ -289,18 +318,27 @@ FUNC main, 16
     jmp  .loop
 .wait:
     mov  eax, [xfd]
-    mov  dword [pollfd], eax
-    mov  dword [pollfd + 4], 1         ; POLLIN
-    lea  A1, [pollfd]
-    mov  A2, 1
-    mov  A3, -1                        ; no interface: sleep until an event
-    cmp  dword [g_ui], 0
-    je   .p
-    mov  A3, 250                       ; overlay: tick the clock 4x/s
-.p: call poll
-    cmp  dword [g_ui], 0
-    je   .loop
-    mov  dword [dirty], 1
+    mov  dword [pollfds], eax
+    mov  dword [pollfds + 4], 1        ; POLLIN
+    mov  eax, [wake_fd]
+    mov  dword [pollfds + 8], eax
+    mov  dword [pollfds + 12], 1
+    call core_next_wake                ; -1: sleep until something happens
+    mov  ebx, eax
+    lea  A1, [pollfds]
+    mov  A2, 2
+    movsxd A3, ebx
+    call poll
+    test eax, eax
+    jnz  .woke
+    mov  dword [dirty], 1              ; timer tick
+.woke:
+    mov  A1d, [wake_fd]                ; drain the wake pipe
+    lea  A2, [wake_buf]
+    mov  A3, 64
+    call read
+    test rax, rax
+    jg   .woke
     jmp  .loop
 .quit:
     xor  A1, A1
@@ -376,6 +414,8 @@ FUNC on_event, 0
     mov  eax, [ev]
     cmp  eax, KeyPress
     je   .key
+    cmp  eax, ButtonPress
+    je   .button
     cmp  eax, Expose
     je   .expose
     cmp  eax, ConfigureNotify
@@ -388,6 +428,14 @@ FUNC on_event, 0
 .expose:
     mov  dword [dirty], 1
     RET_
+.button:
+    cmp  dword [ev + 84], 1            ; left button
+    jne  .r
+    mov  A1d, [ev + 64]
+    mov  A2d, [ev + 68]
+    call core_click
+    or   [dirty], eax
+    RET_
 .conf:
     mov  eax, [ev + 56]
     mov  ecx, [ev + 60]
@@ -395,9 +443,14 @@ FUNC on_event, 0
     jne  .rs
     cmp  ecx, [fb_h]
     je   .r
-.rs:mov  A1d, eax
-    mov  A2d, ecx
+.rs:mov  ebx, eax
+    mov  r12d, ecx
+    mov  A1d, ebx
+    mov  A2d, r12d
     call fb_resize
+    mov  A1d, ebx
+    mov  A2d, r12d
+    call core_note_size
     mov  dword [dirty], 1
 .r: RET_
 
@@ -424,11 +477,13 @@ FUNC on_event, 0
     je   .kprev
     cmp  rax, 0xff55                   ; Page Up
     je   .kprev
-    cmp  rax, 0xff09                   ; Tab
-    je   .kui
-    cmp  rax, 'i'
-    je   .kui
+    cmp  rax, 0xff09                   ; Tab (Shift+Tab: blank)
+    je   .ktab
+    cmp  rax, 0xfe20                   ; ISO_Left_Tab = Shift+Tab
+    je   .kblank
     cmp  rax, 'f'
+    je   .kfont
+    cmp  rax, 0xffc8                   ; F11
     je   .kfs
     cmp  rax, 0xff1b                   ; Escape leaves fullscreen
     je   .kesc
@@ -449,7 +504,14 @@ FUNC on_event, 0
     jmp  .kcore
 .kprev:  mov ecx, K_PREV
     jmp  .kcore
-.kui:    mov ecx, K_UI
+.ktab:
+    test dword [ev + 80], 1            ; ShiftMask
+    jnz  .kblank
+    mov  ecx, K_UI
+    jmp  .kcore
+.kblank: mov ecx, K_BLANK
+    jmp  .kcore
+.kfont:  mov ecx, K_FONT
 .kcore:
     mov  A1d, ecx
     call core_key
@@ -819,8 +881,8 @@ FUNC add_path, PATHMAX + 16
     call core_list_add
 .r: RET_
 
-; is_audio(name) -> eax 1 if extension is mp3/flac/ogg/oga/wav
-FUNC is_audio, 0
+; ext4(name) -> eax: extension lower-cased and packed (up to 4 chars), 0 if none
+FUNC ext4, 0
     ARGS rbx
     xor  r12, r12                      ; last '.'
     mov  rsi, rbx
@@ -835,11 +897,11 @@ FUNC is_audio, 0
 .e: test r12, r12
     jz   .no
     inc  r12
-    xor  eax, eax                      ; lower-cased extension, up to 4 chars
+    xor  eax, eax
     xor  ecx, ecx
 .x: movzx edx, byte [r12 + rcx]
     test edx, edx
-    jz   .cmp
+    jz   .r
     cmp  ecx, 4
     jae  .no
     cmp  edx, 'A'
@@ -849,12 +911,17 @@ FUNC is_audio, 0
     or   edx, 0x20
 .s: mov  r8d, ecx
     shl  ecx, 3
-    shl  edx, cl                       ; byte n of the packed extension
+    shl  edx, cl
     mov  ecx, r8d
     or   eax, edx
     inc  ecx
     jmp  .x
-.cmp:
+.no:xor  eax, eax
+.r: RET_
+
+; is_audio(name) -> eax 1 if extension is mp3/flac/ogg/oga/wav
+FUNC is_audio, 0
+    call ext4
     cmp  eax, 'mp3'
     je   .yes
     cmp  eax, 'flac'
@@ -865,7 +932,7 @@ FUNC is_audio, 0
     je   .yes
     cmp  eax, 'wav'
     je   .yes
-.no:xor  eax, eax
+    xor  eax, eax
     RET_
 .yes:
     mov  eax, 1
@@ -875,7 +942,7 @@ FUNC is_audio, 0
 ; services used by the core
 ; ============================================================================
 
-; plat_title(path, out, max): basename without extension, ASCII only
+; plat_title(path, out, max): basename without extension, UTF-8
 FUNC plat_title, 0
     ARGS rbx, r12, r13
     mov  rsi, rbx                      ; find basename and last dot
@@ -906,11 +973,8 @@ FUNC plat_title, 0
     jae  .z
     mov  al, [rsi]
     inc  rsi
-    cmp  al, 0x80
-    jb   .a
-    cmp  al, 0xC0
-    jb   .c                            ; UTF-8 continuation: drop
-    mov  al, '?'                       ; non-ASCII character
+    cmp  al, 0x80                      ; UTF-8 passes through untouched
+    jae  .w
 .a: cmp  al, 32
     jae  .w
     mov  al, '?'
@@ -972,6 +1036,185 @@ FUNC plat_sleep, 0
     imul A1d, A1d, 1000
     call usleep
     RET_
+
+
+; apply_size(): follow the cover's shape (aspect hint) and size
+FUNC apply_size, 0
+    lea  rdi, [hints]
+    xor  eax, eax
+    mov  ecx, 10
+    rep  stosq
+    lea  A1, [art_asp]
+    lea  A2, [art_asp + 4]
+    call core_art_aspect
+    test eax, eax
+    jz   .set                          ; no art: free aspect
+    mov  qword [hints], 128            ; PAspect
+    mov  eax, [art_asp]
+    mov  [hints + 48], eax
+    mov  [hints + 56], eax
+    mov  eax, [art_asp + 4]
+    mov  [hints + 52], eax
+    mov  [hints + 60], eax
+.set:
+    mov  A1, [dpy]
+    mov  A2, [win]
+    lea  A3, [hints]
+    call XSetWMNormalHints
+    cmp  qword [hints], 0
+    je   .r
+    cmp  dword [fullscreen], 0
+    jne  .r
+    mov  A1, [dpy]
+    mov  A2d, [scr]
+    call XDisplayWidth
+    mov  ebx, eax
+    mov  A1, [dpy]
+    mov  A2d, [scr]
+    call XDisplayHeight
+    mov  A2d, eax
+    mov  A1d, ebx
+    mov  A3d, [fb_w]
+    mov  A4d, [fb_h]
+    lea  A5, [tsz]
+    call core_target_size
+    test eax, eax
+    jz   .r
+    mov  A1, [dpy]
+    mov  A2, [win]
+    mov  A3d, [tsz]
+    mov  A4d, [tsz + 4]
+    call XResizeWindow
+.r: RET_
+
+FUNC plat_wake, 0
+    mov  A1d, [wake_fd + 4]
+    lea  A2, [wake_buf]
+    mov  A3, 1
+    call write
+    RET_
+
+FUNC plat_ms, 0
+    mov  A1, 1                         ; CLOCK_MONOTONIC
+    lea  A2, [ts]
+    call clock_gettime
+    mov  rax, [ts + 8]
+    xor  edx, edx
+    mov  ecx, 1000000
+    div  rcx
+    imul rcx, [ts], 1000
+    add  rax, rcx
+    RET_
+
+; copy(dst, src, end) -> rax new dst (bounded, NUL-terminated). Leaf.
+bcopy:
+    mov  rax, A1
+.l: cmp  rax, A3
+    jae  .z
+    mov  cl, [A2]
+    test cl, cl
+    jz   .z
+    mov  [rax], cl
+    inc  rax
+    inc  A2
+    jmp  .l
+.z: mov  byte [rax], 0
+    ret
+
+; plat_font_dir(out, max, short) -> rax end of string
+;   $XDG_DATA_HOME/peep/fonts, else ~/.local/share/peep/fonts
+;   short != 0 writes the home directory as "~"
+FUNC plat_font_dir, 0
+    ARGS rbx, r12, r15
+    lea  r13, [rbx + r12 - 1]          ; end
+    lea  A1, [s_xdg]
+    call getenv
+    test rax, rax
+    jz   .home
+    cmp  byte [rax], 0
+    je   .home
+    mov  A1, rbx
+    mov  A2, rax
+    mov  A3, r13
+    call bcopy
+    jmp  .tail
+.home:
+    lea  A1, [s_home]
+    call getenv
+    mov  r14, rax
+    mov  rax, rbx
+    test r14, r14
+    jz   .tail
+    test r15, r15
+    jz   .full
+    mov  word [rbx], '~'
+    lea  rax, [rbx + 1]
+    jmp  .loc
+.full:
+    mov  A1, rbx
+    mov  A2, r14
+    mov  A3, r13
+    call bcopy
+.loc:
+    mov  A1, rax
+    lea  A2, [s_local]
+    mov  A3, r13
+    call bcopy
+.tail:
+    mov  A1, rax
+    lea  A2, [s_peepfonts]
+    mov  A3, r13
+    call bcopy
+    RET_
+
+; plat_font_scan(list): every .ttf/.otf/.ttc in the fonts folder
+FUNC plat_font_scan, 0
+    ARGS r12
+    lea  A1, [fontdir]
+    mov  A2, PATHMAX - 300
+    xor  A3, A3
+    call plat_font_dir
+    mov  byte [rax], '/'
+    lea  r14, [rax + 1]                ; names go here
+    mov  byte [rax], 0
+    lea  A1, [fontdir]
+    call opendir
+    mov  byte [r14 - 1], '/'
+    test rax, rax
+    jz   .r
+    mov  r15, rax
+.ent:
+    mov  A1, r15
+    call readdir
+    test rax, rax
+    jz   .close
+    lea  rbx, [rax + 19]
+    cmp  byte [rbx], '.'
+    je   .ent
+    mov  A1, rbx
+    call ext4
+    cmp  eax, 'ttf'
+    je   .add
+    cmp  eax, 'otf'
+    je   .add
+    cmp  eax, 'ttc'
+    jne  .ent
+.add:
+    mov  A1, r14
+    mov  A2, rbx
+    lea  A3, [fontdir + PATHMAX - 1]
+    call bcopy
+    lea  rcx, [fontdir]
+    sub  rax, rcx
+    lea  A3, [rax + 1]
+    mov  A1, r12
+    lea  A2, [fontdir]
+    call core_list_add
+    jmp  .ent
+.close:
+    mov  A1, r15
+    call closedir
+.r: RET_
 
 ; ---- ALSA ------------------------------------------------------------------
 FUNC plat_audio_open, 0                ; (rate) -> 0 ok

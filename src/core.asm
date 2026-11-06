@@ -24,6 +24,7 @@ extern plat_unmap           ; (ptr, len)
 extern plat_sleep           ; (ms)
 extern plat_title           ; (path, out, max)  ASCII display name
 extern plat_cmp             ; qsort comparator for native path strings
+extern plat_wake            ; () nudge the UI thread
 ; ---- C runtime ------------------------------------------------------------
 extern malloc, free, realloc, memcpy, qsort
 %ifndef PURE
@@ -31,36 +32,30 @@ extern codec_open, codec_read, codec_seek, codec_close
 %endif
 
 global core_list_new, core_list_add, core_list_free, core_list_sort
-global core_publish, core_player, core_key, core_render
-global g_quit, g_ui
+global core_publish, core_player, core_key
+global g_quit, g_ui, g_blank, g_paused, g_volstep
+global cur_idx, st_count, st_playing, st_rate, st_pos, st_total
+global pending_info, info_free, art_unref
+extern meta_parse, meta_art_ptr, meta_art_len, meta_done
+extern gfx_font_cycle
+%ifndef PURE
+extern image_decode, image_free
+%endif
 
 section .data
 align 8
 pending_list  dq 0          ; new playlist waiting for the player thread
+pending_info  dq 0          ; new track info waiting for the UI thread
 g_quit        dd 0
 g_paused      dd 0
-g_ui          dd 0          ; 0 = absolutely no interface (default)
+g_ui          dd 0          ; Tab: info overlay
+g_blank       dd 0          ; Shift+Tab: nothing at all, just black
 g_volstep     dd 20         ; 0..20
 cmd_skip      dd 0          ; tracks to move (+/-), accumulated
 cmd_seek      dd 0          ; seconds to seek (+/-), accumulated
 
 ; gain = 256 * (step/20)^2  — roughly perceptual
 voltab: dw 0,1,3,6,10,16,23,31,41,52,64,77,92,108,125,144,164,185,207,231,256
-
-col_bar_bg    equ 0x00222222
-col_bar_fg    equ 0x00b8b8b8
-col_text      equ 0x00808080
-col_text_hi   equ 0x00c8c8c8
-
-s_drop        db "drop music here", 0
-s_paused      db "paused  ", 0
-s_vol         db "vol ", 0
-s_slash       db " / ", 0
-s_sep         db "  ", 0
-s_end         db "end", 0
-s_q           db "--:--", 0
-
-%include "font.inc"
 
 section .bss
 alignb 16
@@ -72,20 +67,13 @@ st_playing    resd 1         ; read by UI
 st_rate       resd 1         ; read by UI
 st_pos        resq 1         ; read by UI (frames)
 st_total      resq 1         ; read by UI (frames)
-st_title      resb 160       ; read by UI (ASCII)
 map_ptr       resq 1
 map_len       resq 1
 dev_rate      resd 1
+last_art      resq 1         ; player's reference to the most recent art
 alignb 16
 decbuf        resw CHUNK*MAXCH
 outbuf        resw CHUNK*2
-; render context (UI thread only)
-rc_buf        resq 1
-rc_w          resd 1
-rc_h          resd 1
-rc_s          resd 1
-txt_l         resb 256
-txt_r         resb 64
 
 section .text
 
@@ -353,10 +341,6 @@ FUNC open_track, 16
     mov  rax, [rax + PL_ITEMS]
     mov  rbx, [rax + rcx*8]           ; path
     mov  A1, rbx
-    lea  A2, [st_title]
-    mov  A3, 150
-    call plat_title
-    mov  A1, rbx
     lea  A2, [map_len]
     call plat_map
     test rax, rax
@@ -377,6 +361,9 @@ FUNC open_track, 16
     jb   .close
     cmp  eax, 768000
     ja   .close
+    mov  A1, rbx
+    call publish_info                 ; playable: title / artist / art -> UI
+    mov  eax, [g_dec + DEC_RATE]
     cmp  eax, [dev_rate]
     je   .devok
     cmp  dword [dev_rate], 0
@@ -540,6 +527,153 @@ FUNC play_track, 0
 .out:
     RET_
 
+;  ---------------------------------------------------------------------------
+;  Track info (player thread -> UI thread)
+;  ---------------------------------------------------------------------------
+
+; art_unref(art): drop one reference, free on the last
+FUNC art_unref, 0
+    ARGS rbx
+    test rbx, rbx
+    jz   .r
+    lock dec dword [rbx + ART_REF]
+    jnz  .r
+    mov  A1, [rbx + ART_PX]
+    call free
+    mov  A1, rbx
+    call free
+.r: RET_
+
+; info_free(info)
+FUNC info_free, 0
+    ARGS rbx
+    test rbx, rbx
+    jz   .r
+    mov  A1, [rbx + INFO_ART]
+    call art_unref
+    mov  A1, rbx
+    call free
+.r: RET_
+
+; fnv1a64(ptr, len) -> rax
+FUNC fnv1a, 0
+    ARGS rbx, r12
+    mov  rax, 0xcbf29ce484222325
+    mov  r13, 0x100000001b3
+.l: test r12, r12
+    jz   .r
+    movzx ecx, byte [rbx]
+    xor  rax, rcx
+    imul rax, r13
+    inc  rbx
+    dec  r12
+    jmp  .l
+.r: RET_
+
+%ifndef PURE
+; decode_art() -> rax ART (new, ref 1) or 0, from meta_art_ptr/len
+FUNC decode_art, 16
+    mov  A1, [meta_art_ptr]
+    mov  A2, [meta_art_len]
+    lea  A3, [L(0)]
+    lea  A4, [L(4)]
+    call image_decode
+    test rax, rax
+    jz   .r
+    mov  rbx, rax                     ; RGBA
+    ; RGBA -> BGRX in place
+    mov  ecx, [L(0)]
+    imul ecx, [L(4)]
+    mov  rsi, rbx
+.cv:test ecx, ecx
+    jz   .cvd
+    mov  eax, [rsi]
+    bswap eax                         ; AABBGGRR -> RRGGBBAA
+    shr  eax, 8                       ; 00RRGGBB
+    mov  [rsi], eax
+    add  rsi, 4
+    dec  ecx
+    jmp  .cv
+.cvd:
+    mov  A1, ART_SIZE
+    call malloc
+    test rax, rax
+    jz   .nomem
+    mov  dword [rax + ART_REF], 1
+    mov  ecx, [L(0)]
+    mov  [rax + ART_W], ecx
+    mov  ecx, [L(4)]
+    mov  [rax + ART_H], ecx
+    mov  [rax + ART_PX], rbx
+    RET_
+.nomem:
+    mov  A1, rbx
+    call image_free
+    xor  eax, eax
+.r: RET_
+%endif
+
+; publish_info(path): parse tags of the mapped file, hand the result to the UI
+FUNC publish_info, 0
+    ARGS r12                          ; path
+    mov  A1, INFO_SIZE
+    call malloc
+    test rax, rax
+    jz   .r
+    mov  rbx, rax
+    mov  byte [rbx + INFO_TITLE], 0
+    mov  byte [rbx + INFO_ARTIST], 0
+    mov  qword [rbx + INFO_ART], 0
+    mov  A1, [map_ptr]
+    mov  A2, [map_len]
+    mov  A3, rbx
+    call meta_parse
+    cmp  byte [rbx + INFO_TITLE], 0
+    jne  .titled
+    mov  A1, r12                      ; no tag: file name
+    lea  A2, [rbx + INFO_TITLE]
+    mov  A3, 256
+    call plat_title
+.titled:
+%ifndef PURE
+    mov  r13, [meta_art_len]
+    test r13, r13
+    jz   .noart
+    mov  A1, [meta_art_ptr]
+    mov  A2, r13
+    call fnv1a
+    mov  r14, rax
+    mov  rax, [last_art]              ; same picture as last track? reuse it
+    test rax, rax
+    jz   .dec
+    cmp  [rax + ART_HASH], r14
+    jne  .dec
+    cmp  [rax + ART_LEN], r13
+    je   .have
+.dec:
+    call decode_art
+    test rax, rax
+    jz   .noart
+    mov  [rax + ART_HASH], r14
+    mov  [rax + ART_LEN], r13
+    mov  r15, rax
+    mov  A1, [last_art]
+    call art_unref
+    mov  [last_art], r15
+    mov  rax, r15
+.have:
+    lock inc dword [rax + ART_REF]    ; the info's reference
+    mov  [rbx + INFO_ART], rax
+.noart:
+%endif
+    call meta_done                    ; free any buffers the parser made
+    mov  rax, rbx
+    xchg rax, [pending_info]
+    mov  A1, rax                      ; superseded before the UI saw it
+    call info_free
+    call plat_wake
+.r: RET_
+
 FUNC core_player, 0
 .top:
     cmp  dword [g_quit], 0
@@ -641,393 +775,22 @@ FUNC core_key, 0
     lock dec dword [cmd_skip]
     jmp  .yes
 .k8:cmp  eax, K_UI
-    jne  .no
+    jne  .k9
     xor  dword [g_ui], 1
+    jmp  .yes
+.k9:cmp  eax, K_BLANK
+    jne  .k10
+    xor  dword [g_blank], 1
+    jmp  .yes
+.k10:
+    cmp  eax, K_FONT
+    jne  .no
+    call gfx_font_cycle
 .yes:
     mov  eax, 1
     RET_
 .no:xor  eax, eax
     RET_
-
-; ============================================================================
-; Rendering
-; ============================================================================
-
-; fill_rect(x, y, w, h, color) — clipped
-FUNC fill_rect, 0
-%ifdef WIN64
-    mov  eax, [rbp + 48]              ; caller's [rsp+32] = 5th argument
-%else
-    mov  eax, A5d
-%endif
-    movsxd r12, A1d                   ; x0
-    movsxd r13, A2d                   ; y0
-    movsxd r14, A3d
-    add  r14, r12                     ; x1
-    movsxd r15, A4d
-    add  r15, r13                     ; y1
-    xor  ecx, ecx
-    cmp  r12, 0
-    cmovl r12, rcx
-    cmp  r13, 0
-    cmovl r13, rcx
-    movsxd rcx, dword [rc_w]
-    cmp  r14, rcx
-    cmovg r14, rcx
-    movsxd rcx, dword [rc_h]
-    cmp  r15, rcx
-    cmovg r15, rcx
-    cmp  r12, r14
-    jge  .r
-    movsxd rbx, dword [rc_w]
-    shl  rbx, 2                       ; stride
-.row:
-    cmp  r13, r15
-    jge  .r
-    mov  rdi, r13
-    imul rdi, rbx
-    add  rdi, [rc_buf]
-    lea  rdi, [rdi + r12*4]
-    mov  rcx, r14
-    sub  rcx, r12
-    rep  stosd
-    inc  r13
-    jmp  .row
-.r: RET_
-
-; draw_text(x, y, str, color)
-FUNC draw_text, 16
-    ARGS r12, r13, rbx, r14
-.ch:
-    movzx eax, byte [rbx]
-    test eax, eax
-    jz   .r
-    cmp  eax, 32
-    jb   .q
-    cmp  eax, 126
-    jbe  .ok
-.q: mov  eax, '?'
-.ok:sub  eax, 32
-    lea  rcx, [font8x8]
-    lea  rsi, [rcx + rax*8]
-    mov  [L(0)], rsi
-    xor  r15d, r15d                   ; row
-.row:
-    cmp  r15d, 8
-    jae  .nextch
-    mov  rsi, [L(0)]
-    movzx eax, byte [rsi + r15]
-    mov  [L(8)], eax                  ; bits
-    xor  esi, esi
-    mov  [L(12)], esi                 ; col
-.col:
-    mov  ecx, [L(12)]
-    cmp  ecx, 8
-    jae  .nextrow
-    mov  eax, [L(8)]
-    bt   eax, ecx
-    jnc  .skip
-    mov  eax, [rc_s]
-    imul ecx, eax
-    add  ecx, r12d
-    mov  A1d, ecx
-    mov  edx, r15d
-    imul edx, eax
-    add  edx, r13d
-    mov  A2d, edx
-    mov  A3d, eax
-    mov  A4d, eax
-%ifdef WIN64
-    mov  SARG(5), r14
-%else
-    mov  A5, r14
-%endif
-    call fill_rect
-.skip:
-    inc  dword [L(12)]
-    jmp  .col
-.nextrow:
-    inc  r15d
-    jmp  .row
-.nextch:
-    mov  eax, [rc_s]
-    shl  eax, 3
-    add  r12d, eax
-    inc  rbx
-    jmp  .ch
-.r: RET_
-
-; ---- tiny string builders: all take dst in A1 and return the new end in rax
-FUNC s_cat, 0                          ; (dst, src)
-    mov  rax, A1
-.l: mov  cl, [A2]
-    mov  [rax], cl
-    test cl, cl
-    jz   .r
-    inc  rax
-    inc  A2
-    jmp  .l
-.r: RET_
-
-FUNC s_num, 32                         ; (dst, value, min_digits)
-    mov  rax, A2
-    mov  r8, A3
-    mov  r9, A1
-    lea  r10, [L(31)]
-    mov  byte [r10], 0
-    mov  ecx, 10
-    xor  r11d, r11d
-.l: xor  edx, edx
-    div  rcx
-    add  dl, '0'
-    dec  r10
-    mov  [r10], dl
-    inc  r11
-    test rax, rax
-    jnz  .l
-    cmp  r11, r8
-    jb   .l
-    mov  rax, r9
-.c: mov  cl, [r10]
-    mov  [rax], cl
-    test cl, cl
-    jz   .r
-    inc  rax
-    inc  r10
-    jmp  .c
-.r: RET_
-
-FUNC s_time, 0                         ; (dst, seconds) -> "m:ss"
-    ARGS rbx, r12
-    mov  rax, r12
-    xor  edx, edx
-    mov  ecx, 60
-    div  rcx
-    mov  r13, rdx
-    mov  A1, rbx
-    mov  A2, rax
-    mov  A3, 1
-    call s_num
-    mov  byte [rax], ':'
-    lea  A1, [rax + 1]
-    mov  A2, r13
-    mov  A3, 2
-    call s_num
-    RET_
-
-; frames -> seconds
-%macro FR2SEC 1
-    mov  rax, %1
-    mov  ecx, [st_rate]
-    test ecx, ecx
-    jnz  %%ok
-    mov  ecx, 1
-%%ok:
-    xor  edx, edx
-    div  rcx
-%endmacro
-
-; core_render(buf, w, h)
-FUNC core_render, 16
-    mov  [rc_buf], A1
-    mov  [rc_w], A2d
-    mov  [rc_h], A3d
-    ; clear to black
-    mov  rdi, A1
-    mov  eax, A2d
-    imul eax, A3d
-    mov  ecx, eax
-    xor  eax, eax
-    rep  stosd
-    cmp  dword [g_ui], 0
-    je   .r
-    ; pick a scale for the text
-    mov  dword [rc_s], 1
-    cmp  dword [rc_w], 900
-    jb   .sc
-    cmp  dword [rc_h], 500
-    jb   .sc
-    mov  dword [rc_s], 2
-    cmp  dword [rc_w], 2400
-    jb   .sc
-    mov  dword [rc_s], 3
-.sc:
-    mov  r15d, [rc_s]
-    lea  r14d, [r15d*8]               ; glyph size / padding
-    cmp  dword [st_count], 0
-    jne  .player
-    ; ---- nothing loaded: one quiet hint, centered
-    mov  eax, [rc_w]
-    mov  ecx, 15                      ; strlen("drop music here")
-    imul ecx, r14d
-    sub  eax, ecx
-    sar  eax, 1
-    mov  A1d, eax
-    mov  eax, [rc_h]
-    sub  eax, r14d
-    sar  eax, 1
-    mov  A2d, eax
-    lea  A3, [s_drop]
-    mov  A4, col_text
-    call draw_text
-    RET_
-.player:
-    ; ---- progress bar along the bottom edge
-    mov  eax, [rc_h]
-    lea  ecx, [r15d*2]
-    sub  eax, ecx
-    mov  [L(0)], eax                  ; bar y
-    xor  A1, A1
-    mov  A2d, eax
-    mov  A3d, [rc_w]
-    lea  A4d, [r15d*2]
-%ifdef WIN64
-    mov  qword SARG(5), col_bar_bg
-%else
-    mov  A5, col_bar_bg
-%endif
-    call fill_rect
-    mov  rcx, [st_total]
-    test rcx, rcx
-    jz   .nobar
-    mov  rax, [st_pos]
-    cmp  rax, rcx
-    cmova rax, rcx
-    mov  edx, [rc_w]
-    imul rax, rdx
-    xor  edx, edx
-    div  rcx
-    xor  A1, A1
-    mov  A2d, [L(0)]
-    mov  A3d, eax
-    lea  A4d, [r15d*2]
-%ifdef WIN64
-    mov  qword SARG(5), col_bar_fg
-%else
-    mov  A5, col_bar_fg
-%endif
-    call fill_rect
-.nobar:
-    ; ---- right text: [paused  ]vol NN  m:ss / m:ss
-    lea  rbx, [txt_r]
-    cmp  dword [g_paused], 0
-    je   .np
-    mov  A1, rbx
-    lea  A2, [s_paused]
-    call s_cat
-    mov  rbx, rax
-.np:
-    mov  A1, rbx
-    lea  A2, [s_vol]
-    call s_cat
-    mov  A1, rax
-    mov  eax, [g_volstep]
-    imul eax, 5
-    mov  A2, rax
-    mov  A3, 1
-    call s_num
-    mov  A1, rax
-    lea  A2, [s_sep]
-    call s_cat
-    mov  rbx, rax
-    cmp  dword [st_playing], 0
-    jne  .times
-    mov  A1, rbx
-    lea  A2, [s_end]
-    call s_cat
-    jmp  .rdone
-.times:
-    FR2SEC [st_pos]
-    mov  A1, rbx
-    mov  A2, rax
-    call s_time
-    mov  A1, rax
-    lea  A2, [s_slash]
-    call s_cat
-    mov  rbx, rax
-    cmp  qword [st_total], 0
-    jne  .tt
-    mov  A1, rbx
-    lea  A2, [s_q]
-    call s_cat
-    jmp  .rdone
-.tt:FR2SEC [st_total]
-    mov  A1, rbx
-    mov  A2, rax
-    call s_time
-.rdone:
-    lea  rcx, [txt_r]
-    sub  rax, rcx                     ; length
-    imul eax, r14d
-    mov  ecx, [rc_w]
-    sub  ecx, eax
-    sub  ecx, r14d
-    mov  [L(4)], ecx                  ; right text x
-    ; text baseline
-    mov  eax, [L(0)]
-    sub  eax, r14d
-    sub  eax, r14d
-    mov  [L(8)], eax                  ; text y
-    mov  A1d, [L(4)]
-    mov  A2d, eax
-    lea  A3, [txt_r]
-    mov  A4, col_text
-    call draw_text
-    ; ---- left text: NN/MM  title (truncated to fit)
-    lea  rbx, [txt_l]
-    mov  r12d, [st_count]
-    xor  r13d, r13d                   ; digits of count
-    mov  eax, r12d
-    mov  ecx, 10
-.dg:inc  r13d
-    xor  edx, edx
-    div  ecx
-    test eax, eax
-    jnz  .dg
-    cmp  r13d, 2
-    jae  .dg2
-    mov  r13d, 2
-.dg2:
-    mov  eax, [cur_idx]
-    cmp  eax, r12d
-    jb   .ix
-    lea  eax, [r12d - 1]
-.ix:inc  eax
-    mov  A1, rbx
-    mov  A2, rax
-    mov  A3, r13
-    call s_num
-    mov  byte [rax], '/'
-    lea  A1, [rax + 1]
-    mov  A2, r12
-    mov  A3, r13
-    call s_num
-    mov  A1, rax
-    lea  A2, [s_sep]
-    call s_cat
-    mov  A1, rax
-    lea  A2, [st_title]
-    call s_cat
-    ; max chars = (right_x - 3*pad) / glyph
-    mov  eax, [L(4)]
-    sub  eax, r14d
-    sub  eax, r14d
-    sub  eax, r14d
-    jle  .r
-    xor  edx, edx
-    div  r14d
-    cmp  eax, 250
-    jb   .tr
-    mov  eax, 250
-.tr:lea  rcx, [txt_l]
-    mov  byte [rcx + rax], 0
-    mov  A1d, r14d
-    mov  A2d, [L(8)]
-    lea  A3, [txt_l]
-    mov  A4, col_text_hi
-    call draw_text
-.r: RET_
-
 %ifndef WIN64
 section .note.GNU-stack noalloc noexec nowrite progbits
 %endif

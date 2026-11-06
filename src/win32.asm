@@ -9,6 +9,8 @@ default rel
 
 extern core_list_new, core_list_add, core_list_free, core_publish
 extern core_player, core_key, core_render, g_quit, g_ui
+extern core_take_info, core_target_size, core_note_size, core_art_aspect
+extern core_next_wake, core_click
 
 extern GetModuleHandleW, LoadIconW, LoadCursorW, GetStockObject, RegisterClassExW
 extern CreateWindowExW, ShowWindow, GetMessageW, TranslateMessage, DispatchMessageW
@@ -23,11 +25,14 @@ extern UnmapViewOfFile, CloseHandle, CreateThread, Sleep, CreateEventW
 extern WaitForSingleObject, ExitProcess
 extern waveOutOpen, waveOutPrepareHeader, waveOutUnprepareHeader, waveOutWrite
 extern waveOutReset, waveOutClose
+extern PostMessageW, GetKeyState, GetTickCount64, WideCharToMultiByte
+extern SystemParametersInfoW, GetEnvironmentVariableW, GetModuleFileNameW
 extern malloc, free, memcpy, wcslen, _wcsicmp
 
 global main
 global plat_audio_open, plat_audio_write, plat_audio_flush, plat_audio_close
 global plat_map, plat_unmap, plat_sleep, plat_title, plat_cmp
+global plat_wake, plat_ms, plat_font_scan, plat_font_dir
 
 WM_DESTROY      equ 0x0002
 WM_SIZE         equ 0x0005
@@ -37,6 +42,10 @@ WM_SETCURSOR    equ 0x0020
 WM_KEYDOWN      equ 0x0100
 WM_TIMER        equ 0x0113
 WM_DROPFILES    equ 0x0233
+WM_LBUTTONDOWN  equ 0x0201
+WM_SIZING       equ 0x0214
+WM_APP          equ 0x8000
+START_SIZE      equ 480                ; opens as a square
 WS_OVERLAPPEDWINDOW equ 0x00CF0000
 GWL_STYLE       equ -16
 NBUF            equ 8
@@ -47,6 +56,10 @@ section .data
 w_class     dw __utf16__("Peep"), 0
 w_title     dw __utf16__("Peep"), 0
 w_star      dw __utf16__("\*"), 0
+w_appdata   dw __utf16__("APPDATA"), 0
+w_peepfonts dw __utf16__("\Peep\fonts"), 0
+w_fonts     dw __utf16__("fonts"), 0
+s_fontdir   db "%APPDATA%\Peep\fonts", 0
 
 section .bss
 alignb 16
@@ -67,6 +80,11 @@ alignb 16
 hdrs        resb WAVEHDR_SZ * NBUF
 wbufs       resb CHUNK * 4 * NBUF
 dropbuf     resw 32768
+fontdirw    resw WPATH
+art_w       resd 1
+art_h       resd 1
+tsz         resd 2
+wrect       resd 4
 
 section .text
 
@@ -104,11 +122,11 @@ FUNC main, 160                         ; WNDCLASSEXW(80) + MSG(48) + RECT(16)
     mov  [L(64)], rax
     lea  A1, [L(0)]
     call RegisterClassExW
-    ; outer size for a 640x400 client area
+    ; outer size for a square client area
     mov  dword [L(128)], 0
     mov  dword [L(132)], 0
-    mov  dword [L(136)], 640
-    mov  dword [L(140)], 400
+    mov  dword [L(136)], START_SIZE
+    mov  dword [L(140)], START_SIZE
     lea  A1, [L(128)]
     mov  A2, WS_OVERLAPPEDWINDOW
     xor  A3, A3
@@ -205,6 +223,12 @@ FUNC wndproc, 80                       ; PAINTSTRUCT (72)
     je   .inval
     cmp  r12d, WM_SIZE
     je   .size
+    cmp  r12d, WM_APP
+    je   .app
+    cmp  r12d, WM_LBUTTONDOWN
+    je   .click
+    cmp  r12d, WM_SIZING
+    je   .sizing
     cmp  r12d, WM_ERASEBKGND
     je   .one
     cmp  r12d, WM_DROPFILES
@@ -238,6 +262,32 @@ FUNC wndproc, 80                       ; PAINTSTRUCT (72)
     mov  A1d, r14d
     and  A1d, 0xFFFF                   ; width  = LOWORD(lParam)
     call fb_resize
+    mov  A1d, [fb_w]
+    mov  A2d, [fb_h]
+    call core_note_size
+    jmp  .inval
+.app:                                  ; the player has a new track
+    call core_take_info
+    test eax, eax
+    jz   .zero
+    call apply_size
+    jmp  .inval
+.click:
+    movsx A1d, r14w                    ; x
+    mov  eax, r14d
+    shr  eax, 16
+    movsx A2d, ax                      ; y
+    call core_click
+    test eax, eax
+    jnz  .inval
+    jmp  .zero
+.sizing:
+    cmp  dword [art_w], 0
+    je   .def
+    mov  A1, r13
+    mov  A2, r14
+    call keep_aspect
+    jmp  .one
 .inval:
     mov  A1, rbx
     xor  A2, A2
@@ -278,6 +328,19 @@ FUNC wndproc, 80                       ; PAINTSTRUCT (72)
     mov  A1, rbx
     lea  A2, [L(0)]
     call EndPaint
+    call core_next_wake                ; next redraw: clock tick, notice expiry
+    test eax, eax
+    js   .notimer
+    mov  A1, rbx
+    mov  A2, 1
+    mov  A3d, eax
+    xor  A4, A4
+    call SetTimer
+    jmp  .zero
+.notimer:
+    mov  A1, rbx
+    mov  A2, 1
+    call KillTimer
     jmp  .zero
 .cursor:
     cmp  dword [fullscreen], 0
@@ -339,12 +402,10 @@ FUNC wndproc, 80                       ; PAINTSTRUCT (72)
     je   .kprev
     cmp  eax, 0x21                     ; Page Up
     je   .kprev
-    cmp  eax, 0x09                     ; Tab
-    je   .kui
-    cmp  eax, 'I'
-    je   .kui
+    cmp  eax, 0x09                     ; Tab (Shift+Tab: blank)
+    je   .ktab
     cmp  eax, 'F'
-    je   .kfs
+    je   .kfont
     cmp  eax, 0x7A                     ; F11
     je   .kfs
     cmp  eax, 0x1B                     ; Esc leaves fullscreen
@@ -366,23 +427,15 @@ FUNC wndproc, 80                       ; PAINTSTRUCT (72)
     jmp  .kcore
 .kprev:  mov ecx, K_PREV
     jmp  .kcore
-.kui:
-    mov  A1d, K_UI
-    call core_key
-    ; overlay visible: tick 4x/s; hidden: no timer at all
-    cmp  dword [g_ui], 0
-    je   .kill
-    mov  A1, rbx
-    mov  A2, 1
-    mov  A3, 250
-    xor  A4, A4
-    call SetTimer
-    jmp  .inval
-.kill:
-    mov  A1, rbx
-    mov  A2, 1
-    call KillTimer
-    jmp  .inval
+.ktab:
+    mov  A1, 0x10                      ; VK_SHIFT
+    call GetKeyState
+    mov  ecx, K_UI
+    test ax, ax
+    jns  .kcore
+    mov  ecx, K_BLANK
+    jmp  .kcore
+.kfont:  mov ecx, K_FONT
 .kcore:
     mov  A1d, ecx
     call core_key
@@ -631,7 +684,7 @@ FUNC is_audio, 0
 ; services used by the core
 ; ============================================================================
 
-; plat_title(wpath, out, max): basename without extension, ASCII only
+; plat_title(wpath, out, max): basename without extension, UTF-8
 FUNC plat_title, 0
     ARGS rbx, r12, r13
     mov  rsi, rbx
@@ -655,29 +708,22 @@ FUNC plat_title, 0
     jmp  .f
 .e: test r15, r15
     cmovz r15, rsi
-    mov  rsi, r14
-    mov  rdi, r12
-    lea  rdx, [r12 + r13 - 1]
-.c: cmp  rsi, r15
-    jae  .z
-    cmp  rdi, rdx
-    jae  .z
-    movzx eax, word [rsi]
-    add  rsi, 2
-    cmp  eax, 0xDC00                   ; low surrogate: second half, drop
-    jb   .nl
-    cmp  eax, 0xDFFF
-    jbe  .c
-.nl:cmp  eax, 32
-    jb   .q
-    cmp  eax, 0x7F
-    jb   .w
-.q: mov  eax, '?'
-.w: mov  [rdi], al
-    inc  rdi
-    jmp  .c
-.z: mov  byte [rdi], 0
-    RET_
+    mov  byte [r12], 0
+    sub  r15, r14
+    shr  r15, 1                        ; UTF-16 units
+    jz   .r
+    mov  A1d, 65001                    ; CP_UTF8
+    xor  A2, A2
+    mov  A3, r14
+    mov  A4, r15
+    mov  SARG(5), r12
+    lea  rax, [r13 - 1]
+    mov  SARG(6), rax
+    mov  qword SARG(7), 0
+    mov  qword SARG(8), 0
+    call WideCharToMultiByte
+    mov  byte [r12 + rax], 0
+.r: RET_
 
 FUNC plat_cmp, 0
     mov  A1, [A1]
@@ -747,6 +793,295 @@ FUNC plat_unmap, 0
 FUNC plat_sleep, 0
     call Sleep
     RET_
+
+; ---- 0.2.0: window shape, wake-ups, fonts -------------------------------
+
+; apply_size(): new track info arrived -> follow its cover's shape and size
+FUNC apply_size, 0
+    lea  A1, [art_w]
+    lea  A2, [art_h]
+    call core_art_aspect
+    test eax, eax
+    jnz  .art
+    mov  dword [art_w], 0              ; no cover: free aspect
+    RET_
+.art:
+    cmp  dword [fullscreen], 0
+    jne  .r
+    mov  A1, 0x30                      ; SPI_GETWORKAREA
+    xor  A2, A2
+    lea  A3, [wrect]
+    xor  A4, A4
+    call SystemParametersInfoW
+    mov  A1d, [wrect + 8]
+    sub  A1d, [wrect]
+    mov  A2d, [wrect + 12]
+    sub  A2d, [wrect + 4]
+    mov  A3d, [fb_w]
+    mov  A4d, [fb_h]
+    lea  rax, [tsz]
+    mov  SARG(5), rax
+    call core_target_size
+    test eax, eax
+    jz   .r
+    mov  dword [wrect], 0              ; client size -> window size
+    mov  dword [wrect + 4], 0
+    mov  eax, [tsz]
+    mov  [wrect + 8], eax
+    mov  eax, [tsz + 4]
+    mov  [wrect + 12], eax
+    lea  A1, [wrect]
+    mov  A2, WS_OVERLAPPEDWINDOW
+    xor  A3, A3
+    call AdjustWindowRect
+    mov  A1, [hwnd]
+    xor  A2, A2
+    xor  A3, A3
+    xor  A4, A4
+    mov  eax, [wrect + 8]
+    sub  eax, [wrect]
+    mov  SARG(5), rax
+    mov  eax, [wrect + 12]
+    sub  eax, [wrect + 4]
+    mov  SARG(6), rax
+    mov  qword SARG(7), 0x16           ; NOMOVE | NOZORDER | NOACTIVATE
+    call SetWindowPos
+.r: RET_
+
+; keep_aspect(edge, RECT*): WM_SIZING — hold the cover's shape while dragging
+FUNC keep_aspect, 16
+    ARGS r12, rbx
+    cmp  dword [fullscreen], 0
+    jne  .r
+    mov  dword [L(0)], 0               ; frame size from an empty client
+    mov  dword [L(4)], 0
+    mov  dword [L(8)], 0
+    mov  dword [L(12)], 0
+    lea  A1, [L(0)]
+    mov  A2, WS_OVERLAPPEDWINDOW
+    xor  A3, A3
+    call AdjustWindowRect
+    mov  r14d, [L(8)]
+    sub  r14d, [L(0)]                  ; frame width
+    mov  r15d, [L(12)]
+    sub  r15d, [L(4)]                  ; frame height
+    mov  esi, [rbx + 8]
+    sub  esi, [rbx]
+    sub  esi, r14d                     ; client width
+    mov  edi, [rbx + 12]
+    sub  edi, [rbx + 4]
+    sub  edi, r15d                     ; client height
+    cmp  r12d, 3                       ; top / bottom edges: width follows
+    je   .wfromh
+    cmp  r12d, 6
+    je   .wfromh
+    mov  eax, esi                      ; otherwise height follows width
+    imul eax, [art_h]
+    cdq
+    idiv dword [art_w]
+    add  eax, r15d
+    cmp  r12d, 4                       ; top-left / top-right: move the top
+    je   .top
+    cmp  r12d, 5
+    je   .top
+    add  eax, [rbx + 4]
+    mov  [rbx + 12], eax
+    RET_
+.top:
+    mov  ecx, [rbx + 12]
+    sub  ecx, eax
+    mov  [rbx + 4], ecx
+    RET_
+.wfromh:
+    mov  eax, edi
+    imul eax, [art_w]
+    cdq
+    idiv dword [art_h]
+    add  eax, r14d
+    add  eax, [rbx]
+    mov  [rbx + 8], eax
+.r: RET_
+
+FUNC plat_wake, 0
+    mov  A1, [hwnd]
+    mov  A2, WM_APP
+    xor  A3, A3
+    xor  A4, A4
+    call PostMessageW
+    RET_
+
+FUNC plat_ms, 0
+    call GetTickCount64
+    RET_
+
+; plat_font_dir(out, max, short): where fonts go, for the on-screen hint
+FUNC plat_font_dir, 0
+    mov  rax, A1
+    lea  rcx, [s_fontdir]
+.l: mov  dl, [rcx]
+    mov  [rax], dl
+    test dl, dl
+    jz   .r
+    inc  rax
+    inc  rcx
+    jmp  .l
+.r: RET_
+
+; wcat(dst, src) -> rax end. Leaf.
+wcat:
+    mov  rax, A1
+.l: mov  r10w, [A2]
+    mov  [rax], r10w
+    test r10w, r10w
+    jz   .r
+    add  rax, 2
+    add  A2, 2
+    jmp  .l
+.r: ret
+
+; plat_font_scan(list): %APPDATA%\Peep\fonts and a "fonts" folder next to Peep.exe
+FUNC plat_font_scan, 0
+    ARGS r12
+    lea  A1, [w_appdata]
+    lea  A2, [fontdirw]
+    mov  A3, WPATH - 32
+    call GetEnvironmentVariableW
+    test eax, eax
+    jz   .exe
+    cmp  eax, WPATH - 32
+    jae  .exe
+    lea  A1, [fontdirw]
+    lea  A1, [A1 + rax*2]
+    lea  A2, [w_peepfonts]
+    call wcat
+    mov  A1, r12
+    lea  A2, [fontdirw]
+    call scan_fonts
+.exe:
+    xor  A1, A1
+    lea  A2, [fontdirw]
+    mov  A3, WPATH - 32
+    call GetModuleFileNameW
+    test eax, eax
+    jz   .r
+    cmp  eax, WPATH - 32
+    jae  .r
+    lea  rsi, [fontdirw]
+    lea  rdi, [rsi + rax*2]
+.bs:cmp  rdi, rsi                      ; cut after the last backslash
+    jbe  .r
+    sub  rdi, 2
+    cmp  word [rdi], '\'
+    jne  .bs
+    lea  A1, [rdi + 2]
+    lea  A2, [w_fonts]
+    call wcat
+    mov  A1, r12
+    lea  A2, [fontdirw]
+    call scan_fonts
+.r: RET_
+
+; scan_fonts(list, wdir): add every .ttf/.otf/.ttc file
+FUNC scan_fonts, WPATH*2 + 608
+    ARGS r12, r13
+    mov  A1, r13
+    call wcslen
+    mov  rbx, rax
+    lea  rax, [rbx + 4]
+    cmp  rax, WPATH
+    jae  .r
+    lea  rdi, [L(0)]
+    mov  rsi, r13
+    mov  rcx, rbx
+    rep  movsw
+    mov  dword [rdi], 0x002A005C       ; L"\*"
+    mov  word [rdi + 4], 0
+    lea  A1, [L(0)]
+    lea  A2, [L(WPATH*2)]
+    call FindFirstFileW
+    cmp  rax, -1
+    je   .r
+    mov  r15, rax
+    lea  rax, [L(2)]
+    lea  rax, [rax + rbx*2]
+    mov  [L(WPATH*2 + 600)], rax
+.ent:
+    test dword [L(WPATH*2)], 0x10      ; skip folders
+    jnz  .nx
+    lea  rsi, [L(WPATH*2 + 44)]
+    mov  rdi, [L(WPATH*2 + 600)]
+    lea  rdx, [L(WPATH*2 - 2)]
+.cp:mov  ax, [rsi]
+    cmp  rdi, rdx
+    jae  .nx
+    mov  [rdi], ax
+    add  rdi, 2
+    add  rsi, 2
+    test ax, ax
+    jnz  .cp
+    mov  A1, [L(WPATH*2 + 600)]
+    call ext4w
+    cmp  eax, 'ttf'
+    je   .add
+    cmp  eax, 'otf'
+    je   .add
+    cmp  eax, 'ttc'
+    jne  .nx
+.add:
+    lea  A1, [L(0)]
+    call wcslen
+    lea  A3, [rax*2 + 2]
+    mov  A1, r12
+    lea  A2, [L(0)]
+    call core_list_add
+.nx:mov  A1, r15
+    lea  A2, [L(WPATH*2)]
+    call FindNextFileW
+    test eax, eax
+    jnz  .ent
+    mov  A1, r15
+    call FindClose
+.r: RET_
+
+; ext4w(wname) -> eax lower-cased packed extension (<= 4 ASCII chars) or 0
+FUNC ext4w, 0
+    ARGS rbx
+    xor  r12, r12
+    mov  rsi, rbx
+.f: mov  ax, [rsi]
+    test ax, ax
+    jz   .e
+    cmp  ax, '.'
+    jne  .n
+    mov  r12, rsi
+.n: add  rsi, 2
+    jmp  .f
+.e: test r12, r12
+    jz   .no
+    add  r12, 2
+    xor  eax, eax
+    xor  ecx, ecx
+.x: movzx edx, word [r12 + rcx*2]
+    test edx, edx
+    jz   .r
+    cmp  ecx, 4
+    jae  .no
+    cmp  edx, 0x7F
+    ja   .no
+    cmp  edx, 'A'
+    jb   .s
+    cmp  edx, 'Z'
+    ja   .s
+    or   edx, 0x20
+.s: mov  r8d, ecx
+    shl  ecx, 3
+    shl  edx, cl
+    mov  ecx, r8d
+    or   eax, edx
+    inc  ecx
+    jmp  .x
+.no:xor  eax, eax
+.r: RET_
 
 ; ---- waveOut ---------------------------------------------------------------
 FUNC plat_audio_open, 32               ; (rate) -> 0 ok

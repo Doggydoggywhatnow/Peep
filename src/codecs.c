@@ -1,11 +1,14 @@
 /*
  * Peep — codec shim.
  *
- * This is the only C in Peep. It exists so the assembly can call four
- * well-tested public-domain decoders (MP3, FLAC, Ogg Vorbis, and every WAV
- * flavour the assembly WAV decoder doesn't handle) through one tiny API.
- * Everything else — windowing, drag & drop, playlists, audio output,
- * mixing, rendering, input — is hand-written assembly in src/*.asm.
+ * This is the only C in Peep. It exists so the assembly can call
+ * well-tested public-domain libraries through one tiny API:
+ *   - audio: dr_mp3, dr_flac, dr_wav, stb_vorbis
+ *   - cover art: stb_image (JPEG, PNG, BMP, GIF)
+ *   - custom fonts: stb_truetype (TTF, OTF, TTC)
+ * Everything else — windowing, drag & drop, playlists, tag parsing, audio
+ * output, mixing, image scaling, text layout, rendering, input — is
+ * hand-written assembly in src/*.asm.
  *
  * Build `make pure` to leave this file out entirely: Peep then plays
  * 16-bit PCM WAV with its own assembly decoder and nothing else.
@@ -22,6 +25,19 @@
 #define DR_WAV_NO_STDIO
 #define STB_VORBIS_NO_STDIO
 #define STB_VORBIS_NO_PUSHDATA_API
+#define STB_IMAGE_IMPLEMENTATION
+#define STBI_NO_STDIO
+#define STBI_ONLY_JPEG
+#define STBI_ONLY_PNG
+#define STBI_ONLY_BMP
+#define STBI_ONLY_GIF
+#include "../third_party/stb_image.h"
+#include <math.h>
+/* glibc 2.38 re-versioned fmod; keep the AppImage runnable on older systems */
+static double peep_fmod(double x, double y) { return x - trunc(x / y) * y; }
+#define STBTT_fmod(x, y) peep_fmod(x, y)
+#define STB_TRUETYPE_IMPLEMENTATION
+#include "../third_party/stb_truetype.h"
 #include "../third_party/dr_mp3.h"
 #include "../third_party/dr_flac.h"
 #include "../third_party/dr_wav.h"
@@ -110,3 +126,51 @@ void codec_close(dec_t *d)
     d->type = 0;
     d->h = 0;
 }
+
+/* ---- cover art ---------------------------------------------------------- */
+unsigned char *image_decode(const unsigned char *p, size_t n, int *w, int *h)
+{
+    int c;
+    if (n > 0x7fffffff) return NULL;
+    return stbi_load_from_memory(p, (int)n, w, h, &c, 4);   /* RGBA */
+}
+void image_free(void *p) { stbi_image_free(p); }
+
+/* ---- fonts ---------------------------------------------------------------
+ * Sizes cross the boundary as pixels; advances as 26.6 fixed point. */
+void *font_load(const unsigned char *p, size_t n)
+{
+    stbtt_fontinfo *f;
+    int off = stbtt_GetFontOffsetForIndex(p, 0);
+    if (off < 0 || (size_t)off >= n) return NULL;
+    f = malloc(sizeof *f);
+    if (!f) return NULL;
+    if (!stbtt_InitFont(f, p, off)) { free(f); return NULL; }
+    return f;
+}
+void font_free(void *f) { free(f); }
+
+int font_ascent(void *f, int px)
+{
+    int a, d, g;
+    stbtt_GetFontVMetrics(f, &a, &d, &g);
+    return (int)(a * stbtt_ScaleForPixelHeight(f, (float)px) + 0.5f);
+}
+int font_advance(void *f, int cp, int px)
+{
+    int adv, lsb;
+    stbtt_GetCodepointHMetrics(f, cp, &adv, &lsb);
+    return (int)(adv * stbtt_ScaleForPixelHeight(f, (float)px) * 64.0f + 0.5f);
+}
+int font_kern(void *f, int a, int b, int px)
+{
+    return (int)(stbtt_GetCodepointKernAdvance(f, a, b) *
+                 stbtt_ScaleForPixelHeight(f, (float)px) * 64.0f);
+}
+/* out[0..3] = width, height, xoff, yoff. Returns an 8-bit coverage bitmap. */
+unsigned char *font_glyph(void *f, int cp, int px, int *out)
+{
+    float s = stbtt_ScaleForPixelHeight(f, (float)px);
+    return stbtt_GetCodepointBitmap(f, 0, s, cp, &out[0], &out[1], &out[2], &out[3]);
+}
+void font_glyph_free(void *b) { stbtt_FreeBitmap(b, NULL); }
