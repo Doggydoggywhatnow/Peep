@@ -20,7 +20,7 @@ extern XLookupKeysym, XDefaultVisual, XDefaultDepth, XDefaultGC, XCreateImage
 extern XPutImage, XFlush, XSendEvent, XConvertSelection, XGetWindowProperty
 extern XFree, XCreateBitmapFromData, XCreatePixmapCursor, XDefineCursor
 extern XUndefineCursor, XResizeWindow, XSetWMNormalHints, XDisplayWidth
-extern XDisplayHeight
+extern XDisplayHeight, XSetWindowBackgroundPixmap
 extern snd_pcm_open, snd_pcm_set_params, snd_pcm_writei, snd_pcm_recover
 extern snd_pcm_drop, snd_pcm_prepare, snd_pcm_drain, snd_pcm_close
 extern malloc, free, open, close, lseek, mmap, munmap, opendir, readdir
@@ -174,6 +174,12 @@ FUNC main, 16
     mov  qword SARG(9), 0
     call XCreateSimpleWindow
     mov  [win], rax
+    ; no background: the server must not clear the window to black on each
+    ; resize step, which flickers and shows half-drawn frames while dragging
+    mov  A1, [dpy]
+    mov  A2, rax
+    xor  A3, A3                        ; None
+    call XSetWindowBackgroundPixmap
     mov  A1, [dpy]
     mov  A2, [win]
     lea  A3, [s_title]

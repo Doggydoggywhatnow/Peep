@@ -15,6 +15,7 @@ extern core_next_wake, core_click
 extern GetModuleHandleW, LoadIconW, LoadCursorW, GetStockObject, RegisterClassExW
 extern CreateWindowExW, ShowWindow, GetMessageW, TranslateMessage, DispatchMessageW
 extern DefWindowProcW, PostQuitMessage, DestroyWindow, InvalidateRect, BeginPaint
+extern UpdateWindow
 extern EndPaint, StretchDIBits, SetTimer, KillTimer, AdjustWindowRect, SetCursor
 extern GetWindowLongW, SetWindowLongW, GetWindowPlacement, SetWindowPlacement
 extern SetWindowPos, MonitorFromWindow, GetMonitorInfoW, SetProcessDPIAware
@@ -102,6 +103,7 @@ FUNC main, 160                         ; WNDCLASSEXW(80) + MSG(48) + RECT(16)
     mov  ecx, 10
     rep  stosq
     mov  dword [L(0)], 80
+    mov  dword [L(4)], 3               ; CS_VREDRAW | CS_HREDRAW: repaint all on resize
     lea  rax, [wndproc]
     mov  [L(8)], rax
     mov  rax, [hinst]
@@ -265,7 +267,15 @@ FUNC wndproc, 80                       ; PAINTSTRUCT (72)
     mov  A1d, [fb_w]
     mov  A2d, [fb_h]
     call core_note_size
-    jmp  .inval
+    ; paint now, inside the sizing loop, so every drag step shows a whole
+    ; frame instead of the old pixels clipped to the new size
+    mov  A1, rbx
+    xor  A2, A2
+    xor  A3, A3
+    call InvalidateRect
+    mov  A1, rbx
+    call UpdateWindow
+    jmp  .zero
 .app:                                  ; the player has a new track
     call core_take_info
     test eax, eax
