@@ -2,6 +2,23 @@
 
 All notable changes to Peep.
 
+## 0.2.7
+
+### Faster
+- Peep starts much faster when opened with files. On a typical desktop the
+  cover used to appear about 150 ms after launch, as a black square that then
+  jumped to the cover's size. Now the window appears already at the cover's
+  size and shape, with the cover in it, about 20 ms after launch.
+  - Playback starts before the window is built, so opening the sound device
+    (the slowest step with PipeWire or PulseAudio) overlaps with setting up
+    the window.
+  - The cover is decoded on its own thread, alongside the audio, and shown
+    as soon as it's ready. Neither waits for the other.
+  - Peep waits for the first cover, at most 0.3 s, before showing the window.
+- Window setup asks the X server for everything in one round trip, and the
+  invisible fullscreen cursor is only created the first time you go
+  fullscreen.
+
 ## 0.2.6
 
 ### Added

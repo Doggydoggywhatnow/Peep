@@ -14,7 +14,7 @@ extern core_take_info, core_target_size, core_note_size, core_art_aspect
 extern core_next_wake, core_click, core_hover
 
 extern XOpenDisplay, XDefaultScreen, XRootWindow, XCreateSimpleWindow
-extern XStoreName, XSetClassHint, XSelectInput, XInternAtom, XSetWMProtocols
+extern XStoreName, XSetClassHint, XSelectInput, XInternAtoms, XSetWMProtocols
 extern XChangeProperty, XMapWindow, XConnectionNumber, XPending, XNextEvent
 extern XLookupKeysym, XDefaultVisual, XDefaultDepth, XDefaultGC, XCreateImage
 extern XPutImage, XFlush, XSendEvent, XConvertSelection, XGetWindowProperty
@@ -26,7 +26,7 @@ extern XSyncQueryExtension, XSyncInitialize, XSyncCreateCounter, XSyncSetCounter
 extern snd_pcm_open, snd_pcm_set_params, snd_pcm_writei, snd_pcm_recover
 extern snd_pcm_drop, snd_pcm_prepare, snd_pcm_drain, snd_pcm_close, snd_pcm_delay
 extern malloc, free, open, close, lseek, mmap, munmap, opendir, readdir
-extern closedir, strlen, strcasecmp, usleep, pthread_create, poll, write, _exit
+extern closedir, strlen, strcasecmp, usleep, pthread_create, pthread_join, poll, write, _exit
 extern pipe2, read, getenv, clock_gettime
 
 global main
@@ -34,6 +34,7 @@ global plat_audio_open, plat_audio_write, plat_audio_flush, plat_audio_close
 global plat_audio_queued
 global plat_map, plat_unmap, plat_sleep, plat_title, plat_cmp
 global plat_wake, plat_ms, plat_font_scan, plat_font_dir
+global plat_thread, plat_join
 
 ; X11 constants
 KeyPress        equ 2
@@ -49,6 +50,7 @@ XA_ATOM         equ 4
 XA_CARDINAL     equ 6
 EV_MASK         equ (1<<15) | 1 | (1<<2) | (1<<17) | (1<<4) | (1<<5) ; Exposure|KeyPress|ButtonPress|StructureNotify|Enter|Leave
 START_SIZE      equ 480                        ; opens as a square
+FIRST_WAIT      equ 300                        ; ms to wait for the first cover
 SUBSTRUCT_MASK  equ (1<<19) | (1<<20)
 
 PATHMAX         equ 4096
@@ -161,6 +163,39 @@ section .text
 ; ============================================================================
 FUNC main, 16
     ARGS r12, r13                      ; argc, argv
+    ; Start playing first: the player thread opens the audio device (tens of
+    ; ms with PipeWire / PulseAudio) and the first track, and a worker
+    ; decodes its cover, while this thread connects to X and builds the
+    ; window.
+    ; a pipe the player thread pokes when a new track's info is ready
+    lea  A1, [wake_fd]
+    mov  A2, 0x80800                   ; O_CLOEXEC | O_NONBLOCK
+    call pipe2
+    ; player thread
+    lea  A1, [tid]
+    xor  A2, A2
+    lea  A3, [core_player]
+    xor  A4, A4
+    call pthread_create
+    ; files given on the command line ("Open with Peep")
+    cmp  r12d, 2
+    jb   .noargs
+    call core_list_new
+    mov  r14, rax
+    mov  r15d, 1
+.arg:
+    cmp  r15d, r12d
+    jae  .argd
+    mov  A1, r14
+    mov  A2, [r13 + r15*8]
+    xor  A3, A3
+    call add_path
+    inc  r15d
+    jmp  .arg
+.argd:
+    mov  A1, r14
+    call core_publish
+.noargs:
     xor  A1, A1
     call XOpenDisplay
     test rax, rax
@@ -214,19 +249,13 @@ FUNC main, 16
     mov  A2, [win]
     mov  A3, EV_MASK
     call XSelectInput
-    ; atoms
-    xor  ebx, ebx
-.atom:
+    ; atoms, all in one round trip
     mov  A1, [dpy]
-    lea  rax, [atom_names]
-    mov  A2, [rax + rbx*8]
-    xor  A3, A3
-    call XInternAtom
-    lea  rcx, [atoms]
-    mov  [rcx + rbx*8], rax
-    inc  ebx
-    cmp  ebx, NATOMS
-    jb   .atom
+    lea  A2, [atom_names]
+    mov  A3, NATOMS
+    xor  A4, A4
+    lea  A5, [atoms]
+    call XInternAtoms
     mov  A1, [dpy]
     mov  A2, [win]
     ; _NET_WM_SYNC_REQUEST: during a drag the window manager waits for us to
@@ -279,23 +308,6 @@ FUNC main, 16
     mov  SARG(7), rax
     mov  qword SARG(8), 1
     call XChangeProperty
-    ; an invisible cursor for fullscreen
-    mov  A1, [dpy]
-    mov  A2, [win]
-    lea  A3, [blank_bits]
-    mov  A4, 8
-    mov  A5, 8
-    call XCreateBitmapFromData
-    mov  rbx, rax
-    mov  A1, [dpy]
-    mov  A2, rbx
-    mov  A3, rbx
-    lea  A4, [ev]                      ; zeroed XColor x2 (bss)
-    lea  A5, [ev]
-    xor  A6, A6
-    mov  qword SARG(7), 0
-    call XCreatePixmapCursor
-    mov  [blank_cur], rax
     ; framebuffer
     mov  A1, [dpy]
     mov  A2d, [scr]
@@ -312,35 +324,49 @@ FUNC main, 16
     mov  A1, START_SIZE
     mov  A2, START_SIZE
     call fb_resize
-    ; a pipe the player thread pokes when a new track's info is ready
-    lea  A1, [wake_fd]
-    mov  A2, 0x80800                   ; O_CLOEXEC | O_NONBLOCK
-    call pipe2
-    ; player thread
-    lea  A1, [tid]
-    xor  A2, A2
-    lea  A3, [core_player]
-    xor  A4, A4
-    call pthread_create
-    ; files given on the command line ("Open with Peep")
+    ; Opened with files: wait (at most FIRST_WAIT ms) for the first track's
+    ; info and cover, so the window appears at the cover's size and shape
+    ; with the cover in it, instead of as a black square that then jumps.
     cmp  r12d, 2
-    jb   .noargs
-    call core_list_new
-    mov  r14, rax
-    mov  r15d, 1
-.arg:
-    cmp  r15d, r12d
-    jae  .argd
-    mov  A1, r14
-    mov  A2, [r13 + r15*8]
-    xor  A3, A3
-    call add_path
-    inc  r15d
-    jmp  .arg
-.argd:
-    mov  A1, r14
-    call core_publish
-.noargs:
+    jb   .map
+    call plat_ms
+    lea  r14, [rax + FIRST_WAIT]
+.first:
+    call core_take_info
+    test eax, eax
+    jz   .fwait
+    call apply_size
+    test eax, eax
+    jz   .map
+    mov  A1d, [tsz]                    ; draw the first frame at that size
+    mov  A2d, [tsz + 4]
+    call fb_resize
+    mov  A1, [fb]                      ; scale the cover now, before mapping,
+    mov  A2d, [fb_w]                   ; so the first frame is ready at once
+    mov  A3d, [fb_h]
+    call core_render
+    jmp  .map
+.fwait:
+    call plat_ms
+    mov  rbx, r14
+    sub  rbx, rax
+    jle  .map
+    mov  eax, [wake_fd]
+    mov  dword [pollfds], eax
+    mov  dword [pollfds + 4], 1        ; POLLIN
+    lea  A1, [pollfds]
+    mov  A2, 1
+    mov  A3, rbx
+    call poll
+.fdrain:
+    mov  A1d, [wake_fd]
+    lea  A2, [wake_buf]
+    mov  A3, 64
+    call read
+    test rax, rax
+    jg   .fdrain
+    jmp  .first
+.map:
     mov  A1, [dpy]
     mov  A2, [win]
     call XMapWindow
@@ -753,6 +779,34 @@ FUNC xdnd_send, 8
     call XFlush
     RET_
 
+; blank_cursor() -> rax an invisible cursor, made on first use: creating a
+; cursor loads libXcursor and reads the icon themes, which startup skips
+FUNC blank_cursor, 0
+    mov  rax, [blank_cur]
+    test rax, rax
+    jnz  .r
+    mov  A1, [dpy]
+    mov  A2, [win]
+    lea  A3, [blank_bits]
+    mov  A4, 8
+    mov  A5, 8
+    call XCreateBitmapFromData
+    mov  rbx, rax
+    lea  rdi, [sev]                    ; two zeroed XColors
+    xor  eax, eax
+    mov  ecx, 4
+    rep  stosq
+    mov  A1, [dpy]
+    mov  A2, rbx
+    mov  A3, rbx
+    lea  A4, [sev]
+    lea  A5, [sev]
+    xor  A6, A6
+    mov  qword SARG(7), 0
+    call XCreatePixmapCursor
+    mov  [blank_cur], rax
+.r: RET_
+
 FUNC toggle_fullscreen, 0
     xor  dword [fullscreen], 1
     lea  rdi, [sev]
@@ -783,7 +837,10 @@ FUNC toggle_fullscreen, 0
     mov  A2, [win]
     cmp  dword [fullscreen], 0
     je   .show
-    mov  A3, [blank_cur]
+    call blank_cursor
+    mov  A1, [dpy]
+    mov  A2, [win]
+    mov  A3, rax
     call XDefineCursor
     jmp  .f
 .show:
@@ -1178,6 +1235,7 @@ FUNC plat_sleep, 0
 
 
 ; apply_size(): follow the cover's shape (aspect hint) and size
+; apply_size() -> eax 1 if the window was resized to tsz
 FUNC apply_size, 0
     lea  rdi, [hints]
     xor  eax, eax
@@ -1224,13 +1282,36 @@ FUNC apply_size, 0
     mov  A3d, [tsz]
     mov  A4d, [tsz + 4]
     call XResizeWindow
-.r: RET_
+    mov  eax, 1                        ; resized to tsz
+    RET_
+.r: xor  eax, eax
+    RET_
 
 FUNC plat_wake, 0
     mov  A1d, [wake_fd + 4]
     lea  A2, [wake_buf]
     mov  A3, 1
     call write
+    RET_
+
+; plat_thread(fn) -> rax thread handle, 0 on failure
+FUNC plat_thread, 16
+    mov  A3, A1                        ; start routine
+    lea  A1, [L(0)]
+    xor  A2, A2
+    xor  A4, A4
+    call pthread_create
+    xor  ebx, ebx
+    test eax, eax
+    jnz  .r
+    mov  rbx, [L(0)]
+.r: mov  rax, rbx
+    RET_
+
+; plat_join(handle): wait for the thread to finish
+FUNC plat_join, 0
+    xor  A2, A2
+    call pthread_join
     RET_
 
 FUNC plat_ms, 0

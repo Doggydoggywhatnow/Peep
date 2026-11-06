@@ -36,6 +36,7 @@ global plat_audio_open, plat_audio_write, plat_audio_flush, plat_audio_close
 global plat_audio_queued
 global plat_map, plat_unmap, plat_sleep, plat_title, plat_cmp
 global plat_wake, plat_ms, plat_font_scan, plat_font_dir
+global plat_thread, plat_join
 
 WM_DESTROY      equ 0x0002
 WM_SIZE         equ 0x0005
@@ -53,6 +54,8 @@ WM_NCLBUTTONDOWN equ 0x00A1
 WM_EXITSIZEMOVE equ 0x0232
 HTCAPTION       equ 2
 TME_LEAVE       equ 2
+FIRST_WAIT      equ 300            ; ms to wait for the first cover
+T_FIRST         equ 2              ; its timer id
 WM_APP          equ 0x8000
 START_SIZE      equ 480                ; opens as a square
 WS_OVERLAPPEDWINDOW equ 0x00CF0000
@@ -79,6 +82,7 @@ fb_w        resd 1
 fb_h        resd 1
 bmi         resb 44
 fullscreen  resd 1
+hidden      resd 1                 ; not shown yet: waiting for the first cover
 tracking    resd 1                 ; TrackMouseEvent armed: the pointer is over us
 tme         resb 24                ; TRACKMOUSEEVENT
 cur_pt      resq 1                 ; POINT
@@ -200,10 +204,20 @@ FUNC main, 160                         ; WNDCLASSEXW(80) + MSG(48) + RECT(16)
 .argd:
     mov  A1, r14
     call core_publish
+    ; wait (at most FIRST_WAIT ms) for the first track's cover, so the window
+    ; appears at the cover's size and shape instead of as a black square
+    mov  dword [hidden], 1
+    mov  A1, [hwnd]
+    mov  A2, T_FIRST
+    mov  A3, FIRST_WAIT
+    xor  A4, A4
+    call SetTimer
 .freeargs:
     mov  A1, r13
     call LocalFree
 .show:
+    cmp  dword [hidden], 0
+    jne  .msg
     mov  A1, [hwnd]
     mov  A2, 10                        ; SW_SHOWDEFAULT
     call ShowWindow
@@ -235,7 +249,7 @@ FUNC wndproc, 80                       ; PAINTSTRUCT (72)
     cmp  r12d, WM_KEYDOWN
     je   .key
     cmp  r12d, WM_TIMER
-    je   .inval
+    je   .timer
     cmp  r12d, WM_SIZE
     je   .size
     cmp  r12d, WM_APP
@@ -300,7 +314,16 @@ FUNC wndproc, 80                       ; PAINTSTRUCT (72)
     test eax, eax
     jz   .zero
     call apply_size
+    call show_once
     jmp  .inval
+.timer:
+    cmp  r13, T_FIRST
+    jne  .inval
+    mov  A1, rbx
+    mov  A2, T_FIRST
+    call KillTimer
+    call show_once                     ; the cover is late: show the window anyway
+    jmp  .zero
 .click:
     movsx A1d, r14w                    ; x
     mov  eax, r14d
@@ -521,6 +544,19 @@ FUNC wndproc, 80                       ; PAINTSTRUCT (72)
     mov  A1, rbx
     call DestroyWindow
     jmp  .zero
+
+; show_once(): show the window, the first time only
+FUNC show_once, 0
+    cmp  dword [hidden], 0
+    je   .r
+    mov  dword [hidden], 0
+    mov  A1, [hwnd]
+    mov  A2, T_FIRST
+    call KillTimer
+    mov  A1, [hwnd]
+    mov  A2, 10                        ; SW_SHOWDEFAULT
+    call ShowWindow
+.r: RET_
 
 FUNC fb_resize, 0                      ; (w, h)
     ARGS r12, r13
@@ -977,6 +1013,27 @@ FUNC plat_wake, 0
     xor  A3, A3
     xor  A4, A4
     call PostMessageW
+    RET_
+
+; plat_thread(fn) -> rax thread handle, 0 on failure
+FUNC plat_thread, 0
+    mov  A3, A1                        ; start routine
+    xor  A1, A1
+    xor  A2, A2
+    xor  A4, A4
+    mov  qword SARG(5), 0
+    mov  qword SARG(6), 0
+    call CreateThread
+    RET_
+
+; plat_join(handle): wait for the thread to finish, then release it
+FUNC plat_join, 0
+    ARGS rbx
+    mov  A1, rbx
+    mov  A2d, 0xFFFFFFFF               ; INFINITE
+    call WaitForSingleObject
+    mov  A1, rbx
+    call CloseHandle
     RET_
 
 FUNC plat_ms, 0

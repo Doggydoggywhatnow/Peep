@@ -26,6 +26,8 @@ extern plat_sleep           ; (ms)
 extern plat_title           ; (path, out, max)  ASCII display name
 extern plat_cmp             ; qsort comparator for native path strings
 extern plat_wake            ; () nudge the UI thread
+extern plat_thread          ; (fn) -> rax handle | 0
+extern plat_join            ; (handle)
 ; ---- C runtime ------------------------------------------------------------
 extern malloc, free, realloc, memcpy, qsort
 %ifndef PURE
@@ -55,8 +57,11 @@ g_volstep     dd 20         ; 0..20
 cmd_skip      dd 0          ; tracks to move (+/-), accumulated
 cmd_seek      dd 0          ; seconds to seek (+/-), accumulated
 cmd_refill    dd 0          ; volume changed: re-render the queued audio
-prep_info     dq 0          ; parsed info waiting for its cover (publish_end)
-pub_frames    dq 0          ; frames written since the track opened
+art_thr       dq 0          ; cover-decoding thread, 0 when none
+job_info      dq 0          ; its track info
+job_buf       dq 0          ; its copy of the picture bytes
+job_len       dq 0
+job_hash      dq 0
 
 ; gain = 256 * (step/20)^2  — roughly perceptual
 voltab: dw 0,1,3,6,10,16,23,31,41,52,64,77,92,108,125,144,164,185,207,231,256
@@ -366,7 +371,7 @@ FUNC open_track, 16
     cmp  eax, 768000
     ja   .close
     mov  A1, rbx
-    call publish_begin                ; tags now; cover once the audio runs
+    call publish_info                 ; tags now; the cover decodes alongside
     mov  eax, [g_dec + DEC_RATE]
     cmp  eax, [dev_rate]
     je   .devok
@@ -392,7 +397,6 @@ FUNC open_track, 16
     mov  eax, 1
     RET_
 .close:
-    call publish_end
     call dec_close
 .unmap:
     mov  A1, [map_ptr]
@@ -532,7 +536,6 @@ FUNC play_track, 0
 .novol:
     cmp  dword [g_paused], 0
     je   .play
-    call publish_end                  ; paused early: show the info anyway
     mov  A1, 15
     call plat_sleep
     jmp  .loop
@@ -549,21 +552,13 @@ FUNC play_track, 0
     mov  A2, rbx
     call plat_audio_write
     add  [st_pos], rbx
-    cmp  qword [prep_info], 0
-    je   .loop
-    add  [pub_frames], rbx
-    cmp  qword [pub_frames], PUBLISH_AFTER
-    jb   .loop
-    call publish_end                  ; audio is running: now the cover
     jmp  .loop
 .ended:
     inc  dword [cur_idx]
-    call publish_end                  ; a very short track
     RET_
 .flushout:
     call plat_audio_flush
 .out:
-    call publish_end
     RET_
 
 ;  ---------------------------------------------------------------------------
@@ -610,10 +605,8 @@ FUNC fnv1a, 0
 .r: RET_
 
 %ifndef PURE
-; decode_art() -> rax ART (new, ref 1) or 0, from meta_art_ptr/len
+; decode_art(ptr, len) -> rax ART (new, ref 1) or 0
 FUNC decode_art, 16
-    mov  A1, [meta_art_ptr]
-    mov  A2, [meta_art_len]
     lea  A3, [L(0)]
     lea  A4, [L(4)]
     call image_decode
@@ -652,13 +645,13 @@ FUNC decode_art, 16
 .r: RET_
 %endif
 
-; publish_begin(path): parse the tags of the mapped file. Decoding the cover
-; (10-50 ms for a big JPEG or PNG) waits for publish_end, which play_track
-; calls once ~190 ms of audio is queued, so a new track starts playing
-; without waiting for its picture.
-PUBLISH_AFTER equ 8192                ; frames
-FUNC publish_begin, 0
+; publish_info(path): parse the tags of the mapped file and hand the result
+; to the UI. A cover that needs decoding (10-50 ms for a big JPEG or PNG) is
+; decoded on its own thread, so the track's audio and the window don't wait
+; for it.
+FUNC publish_info, 0
     ARGS r12                          ; path
+    call art_join                     ; the previous cover is done with last_art
     mov  A1, INFO_SIZE
     call malloc
     test rax, rax
@@ -678,20 +671,10 @@ FUNC publish_begin, 0
     mov  A3, 256
     call plat_title
 .titled:
-    mov  [prep_info], rbx
-    mov  qword [pub_frames], 0
-.r: RET_
-
-; publish_end(): decode the cover of the prepared info and hand it to the UI
-FUNC publish_end, 0
-    xor  ebx, ebx
-    xchg rbx, [prep_info]
-    test rbx, rbx
-    jz   .r
 %ifndef PURE
     mov  r13, [meta_art_len]
     test r13, r13
-    jz   .noart
+    jz   .now
     mov  A1, [meta_art_ptr]
     mov  A2, r13
     call fnv1a
@@ -702,30 +685,89 @@ FUNC publish_end, 0
     cmp  [rax + ART_HASH], r14
     jne  .dec
     cmp  [rax + ART_LEN], r13
-    je   .have
-.dec:
-    call decode_art
-    test rax, rax
-    jz   .noart
-    mov  [rax + ART_HASH], r14
-    mov  [rax + ART_LEN], r13
-    mov  r15, rax
-    mov  A1, [last_art]
-    call art_unref
-    mov  [last_art], r15
-    mov  rax, r15
-.have:
+    jne  .dec
     lock inc dword [rax + ART_REF]    ; the info's reference
     mov  [rbx + INFO_ART], rax
-.noart:
+    jmp  .now
+.dec:
+    ; copy the picture (it may live in the parser's buffers or the mapped
+    ; file, both gone soon) and decode it on a worker thread
+    mov  A1, r13
+    call malloc
+    test rax, rax
+    jz   .now
+    mov  r15, rax
+    mov  A1, rax
+    mov  A2, [meta_art_ptr]
+    mov  A3, r13
+    call memcpy
+    call meta_done
+    mov  [job_info], rbx
+    mov  [job_buf], r15
+    mov  [job_len], r13
+    mov  [job_hash], r14
+    lea  A1, [art_worker]
+    call plat_thread
+    mov  [art_thr], rax
+    test rax, rax
+    jnz  .r
+    call art_worker                   ; no thread: decode here
+    RET_
 %endif
+.now:
     call meta_done                    ; free any buffers the parser made
-    mov  rax, rbx
+    mov  A1, rbx
+    call hand_over
+.r: RET_
+
+; hand_over(info): make info the UI's next track info
+FUNC hand_over, 0
+    mov  rax, A1
     xchg rax, [pending_info]
     mov  A1, rax                      ; superseded before the UI saw it
     call info_free
     call plat_wake
+    RET_
+
+; art_join(): wait for the cover thread, if one is running
+FUNC art_join, 0
+    xor  eax, eax
+    xchg rax, [art_thr]
+    test rax, rax
+    jz   .r
+    mov  A1, rax
+    call plat_join
 .r: RET_
+
+%ifndef PURE
+; art_worker(): thread body. Decodes job_buf, attaches it to job_info and
+; hands the info to the UI. Only one runs at a time (publish_info joins the
+; last one first), so it may update last_art freely.
+FUNC art_worker, 0
+    mov  rbx, [job_info]
+    mov  A1, [job_buf]
+    mov  A2, [job_len]
+    call decode_art
+    test rax, rax
+    jz   .pub
+    mov  r15, rax
+    mov  rcx, [job_hash]
+    mov  [r15 + ART_HASH], rcx
+    mov  rcx, [job_len]
+    mov  [r15 + ART_LEN], rcx
+    mov  A1, [last_art]
+    call art_unref
+    mov  [last_art], r15
+    lock inc dword [r15 + ART_REF]    ; the info's reference
+    mov  [rbx + INFO_ART], r15
+.pub:
+    mov  A1, [job_buf]
+    call free
+    mov  A1, rbx
+    call hand_over
+    xor  eax, eax
+    RET_
+%endif
 
 FUNC core_player, 0
 .top:
