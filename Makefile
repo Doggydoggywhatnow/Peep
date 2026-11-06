@@ -67,10 +67,10 @@ exe: $(B)/Peep.exe
 # (https://github.com/AppImage/type2-runtime) followed by a squashfs of AppDir.
 # Point RUNTIME at a downloaded runtime-x86_64.
 RUNTIME ?= runtime-x86_64
-$(B)/Peep-x86_64.AppImage: $(B)/peep res/peep.desktop res/peep.png res/AppRun
+$(B)/Peep-x86_64.AppImage: $(B)/peep res/peep.desktop res/peep.png
 	rm -rf $(B)/AppDir && mkdir -p $(B)/AppDir/usr/bin
 	cp $(B)/peep $(B)/AppDir/usr/bin/peep
-	cp res/AppRun $(B)/AppDir/AppRun && chmod +x $(B)/AppDir/AppRun
+	ln -sf usr/bin/peep $(B)/AppDir/AppRun
 	cp res/peep.desktop res/peep.png $(B)/AppDir/
 	ln -sf peep.png $(B)/AppDir/.DirIcon
 	rm -f $(B)/peep.squashfs

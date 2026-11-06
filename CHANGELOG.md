@@ -2,6 +2,14 @@
 
 All notable changes to Peep.
 
+## 0.2.4
+
+### Changed
+- The AppImage now starts Peep directly: its launcher is a link to the
+  program instead of a small shell script. Nothing changes when you run it.
+- The repository no longer contains any shell script, and GitHub's language
+  bar no longer counts the Makefile.
+
 ## 0.2.3
 
 ### Changed

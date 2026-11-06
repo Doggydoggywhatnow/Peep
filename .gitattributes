@@ -1,0 +1,2 @@
+# Build script: keep it out of GitHub's language statistics
+Makefile linguist-detectable=false
