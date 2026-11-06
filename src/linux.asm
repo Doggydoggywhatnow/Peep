@@ -21,6 +21,7 @@ extern XPutImage, XFlush, XSendEvent, XConvertSelection, XGetWindowProperty
 extern XFree, XCreateBitmapFromData, XCreatePixmapCursor, XDefineCursor
 extern XUndefineCursor, XResizeWindow, XSetWMNormalHints, XDisplayWidth
 extern XDisplayHeight, XSetWindowBackgroundPixmap
+extern XSyncQueryExtension, XSyncInitialize, XSyncCreateCounter, XSyncSetCounter
 extern snd_pcm_open, snd_pcm_set_params, snd_pcm_writei, snd_pcm_recover
 extern snd_pcm_drop, snd_pcm_prepare, snd_pcm_drain, snd_pcm_close
 extern malloc, free, open, close, lseek, mmap, munmap, opendir, readdir
@@ -40,6 +41,7 @@ ConfigureNotify equ 22
 SelectionNotify equ 31
 ClientMessage   equ 33
 XA_ATOM         equ 4
+XA_CARDINAL     equ 6
 EV_MASK         equ (1<<15) | 1 | (1<<2) | (1<<17) ; Exposure|KeyPress|ButtonPress|StructureNotify
 START_SIZE      equ 480                        ; opens as a square
 SUBSTRUCT_MASK  equ (1<<19) | (1<<20)
@@ -49,11 +51,13 @@ PATHMAX         equ 4096
 section .data
 align 8
 atom_names:
-    dq n_proto, n_delete, n_aware, n_enter, n_pos, n_status, n_leave, n_drop
+    dq n_proto, n_delete, n_sync, n_synccnt, n_aware, n_enter, n_pos, n_status, n_leave, n_drop
     dq n_finished, n_sel, n_copy, n_urilist, n_prop, n_wmstate, n_fs
 NATOMS equ ($ - atom_names) / 8
 n_proto     db "WM_PROTOCOLS", 0
 n_delete    db "WM_DELETE_WINDOW", 0
+n_sync      db "_NET_WM_SYNC_REQUEST", 0
+n_synccnt   db "_NET_WM_SYNC_REQUEST_COUNTER", 0
 n_aware     db "XdndAware", 0
 n_enter     db "XdndEnter", 0
 n_pos       db "XdndPosition", 0
@@ -86,6 +90,8 @@ alignb 8
 atoms:
 a_proto     resq 1
 a_delete    resq 1
+a_sync      resq 1
+a_synccnt   resq 1
 a_aware     resq 1
 a_enter     resq 1
 a_pos       resq 1
@@ -112,6 +118,10 @@ fb          resq 1
 fb_w        resd 1
 fb_h        resd 1
 dirty       resd 1
+sync_ctr    resq 1                     ; XSync counter the WM waits on (0: none)
+sync_val    resq 1                     ; XSyncValue {hi, lo} from the last request
+sync_due    resd 1                     ; a request is waiting for its frame
+sync_tmp    resd 2
 fullscreen  resd 1
 xdnd_src    resq 1
 blank_cur   resq 1
@@ -211,8 +221,44 @@ FUNC main, 16
     jb   .atom
     mov  A1, [dpy]
     mov  A2, [win]
+    ; _NET_WM_SYNC_REQUEST: during a drag the window manager waits for us to
+    ; draw each new size before it shows it, so no stale or half-drawn
+    ; rectangles appear while scaling
+    mov  ebx, 1                        ; protocols: WM_DELETE_WINDOW
+    mov  A1, [dpy]
+    lea  A2, [sync_tmp]
+    lea  A3, [sync_tmp + 4]
+    call XSyncQueryExtension
+    test eax, eax
+    jz   .nosync
+    mov  A1, [dpy]
+    lea  A2, [sync_tmp]
+    lea  A3, [sync_tmp + 4]
+    call XSyncInitialize
+    test eax, eax
+    jz   .nosync
+    mov  A1, [dpy]
+    xor  A2, A2                        ; XSyncValue 0
+    call XSyncCreateCounter
+    test rax, rax
+    jz   .nosync
+    mov  [sync_ctr], rax
+    mov  A1, [dpy]
+    mov  A2, [win]
+    mov  A3, [a_synccnt]
+    mov  A4, XA_CARDINAL
+    mov  A5, 32
+    xor  A6, A6                        ; PropModeReplace
+    lea  rax, [sync_ctr]
+    mov  SARG(7), rax
+    mov  qword SARG(8), 1
+    call XChangeProperty
+    mov  ebx, 2                        ; + _NET_WM_SYNC_REQUEST
+.nosync:
+    mov  A1, [dpy]
+    mov  A2, [win]
     lea  A3, [a_delete]
-    mov  A4, 1
+    mov  A4, rbx
     call XSetWMProtocols
     ; XdndAware = 5
     mov  A1, [dpy]
@@ -409,7 +455,15 @@ FUNC present, 0
     mov  eax, [fb_h]
     mov  SARG(10), rax
     call XPutImage
+    ; this frame answers the WM's pending sync request: release the drag
+    cmp  dword [sync_due], 0
+    je   .f
+    mov  dword [sync_due], 0
     mov  A1, [dpy]
+    mov  A2, [sync_ctr]
+    mov  A3, [sync_val]
+    call XSyncSetCounter
+.f: mov  A1, [dpy]
     call XFlush
 .r: RET_
 
@@ -538,9 +592,21 @@ FUNC on_event, 0
     mov  rbx, [ev + 56]                ; data.l[0]
     cmp  rax, [a_proto]
     jne  .c1
+    cmp  rbx, [a_sync]
+    je   .sync
     cmp  rbx, [a_delete]
     jne  .r
     mov  dword [g_quit], 1
+    RET_
+.sync:                                 ; l[2] = low, l[3] = high 32 bits
+    cmp  qword [sync_ctr], 0
+    je   .r
+    mov  eax, [ev + 80]
+    mov  ecx, [ev + 72]
+    mov  dword [sync_val], eax         ; XSyncValue.hi
+    mov  dword [sync_val + 4], ecx     ; XSyncValue.lo
+    mov  dword [sync_due], 1
+    mov  dword [dirty], 1              ; answer with a frame even at the same size
     RET_
 .c1:cmp  rax, [a_enter]
     jne  .c2

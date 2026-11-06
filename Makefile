@@ -37,11 +37,11 @@ $(B)/gfx_pure.o: src/gfx.asm $(CORE_DEPS) | $(B)
 $(B)/codecs.o: src/codecs.c | $(B)
 	$(CC) $(CODEC_CFLAGS) -c $< -o $@
 
-LINUX_LIBS := -lX11 -lasound -lm
+LINUX_LIBS := -lX11 -lXext -lasound -lm
 $(B)/peep: $(B)/core.o $(B)/meta.o $(B)/gfx.o $(B)/linux.o $(B)/codecs.o
 	$(CC) -no-pie -s -Wl,--as-needed -Wl,--gc-sections -o $@ $^ $(LINUX_LIBS)
 $(B)/peep-pure: $(B)/core_pure.o $(B)/meta.o $(B)/gfx_pure.o $(B)/linux.o
-	$(CC) -no-pie -s -Wl,--as-needed -o $@ $^ -lX11 -lasound
+	$(CC) -no-pie -s -Wl,--as-needed -o $@ $^ -lX11 -lXext -lasound
 pure: $(B)/peep-pure
 
 # ---- Windows ---------------------------------------------------------------

@@ -1,4 +1,4 @@
-# Peep 0.2.1
+# Peep 0.2.2
 
 A music player that is just a screen.
 
@@ -14,8 +14,8 @@ writes to disk.
 
 | Download | Platform |
 |---|---|
-| [`Peep-0.2.1-x86_64.AppImage`](releases/Peep-0.2.1-x86_64.AppImage) | Linux x86-64 |
-| [`Peep-0.2.1.exe`](releases/Peep-0.2.1.exe) | Windows x64 |
+| [`Peep-0.2.2-x86_64.AppImage`](releases/Peep-0.2.2-x86_64.AppImage) | Linux x86-64 |
+| [`Peep-0.2.2.exe`](releases/Peep-0.2.2.exe) | Windows x64 |
 
 ## Use
 
@@ -74,7 +74,7 @@ src/meta.asm    tag reader: ID3v2/v1, FLAC blocks, Ogg page reassembly,
                 Vorbis comments, base64 pictures, WAV LIST/INFO
 src/gfx.asm     cover scaling (box-filter halving + SSE2 bilinear), overlay,
                 buttons, UTF-8 text layout, font cycling, window sizing
-src/linux.asm   X11 window + XDND drag & drop, ALSA, aspect hints, fonts dir
+src/linux.asm   X11 window + XDND drag & drop, ALSA, aspect hints, resize sync, fonts dir
 src/win32.asm   Win32 window + WM_DROPFILES, waveOut, WM_SIZING aspect lock
 src/codecs.c    ~150-line shim over public-domain libraries (see below)
 ```
@@ -95,7 +95,7 @@ the overlay is visible, it wakes four times a second to update the clock.
 
 ## Build
 
-Requires `nasm`. For Linux you also need `gcc` and the libX11 and libasound
+Requires `nasm`. For Linux you also need `gcc` and the libX11, libXext and libasound
 development headers. For Windows you need `mingw-w64`, and for the AppImage,
 `squashfs-tools`.
 

@@ -2,6 +2,18 @@
 
 All notable changes to Peep.
 
+## 0.2.2
+
+### Fixed
+- Linux: resizing the window is now smooth. Peep now tells the window
+  manager when each new size has been drawn (`_NET_WM_SYNC_REQUEST`), so it
+  no longer shows stale or half-drawn rectangles of the cover while you
+  drag. This works with window managers that support it, including GNOME,
+  KDE and Xfce.
+
+### Changed
+- The Linux build also links libXext, for the X Sync extension.
+
 ## 0.2.1
 
 ### Fixed
