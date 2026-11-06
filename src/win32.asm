@@ -312,7 +312,7 @@ FUNC wndproc, 80                       ; PAINTSTRUCT (72)
 .app:                                  ; the player has a new track
     call core_take_info
     test eax, eax
-    jz   .zero
+    jz   .inval                        ; a seek: redraw with the new position
     call apply_size
     call show_once
     jmp  .inval

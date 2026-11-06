@@ -2,6 +2,19 @@
 
 All notable changes to Peep.
 
+## 0.2.8
+
+### Fixed
+- The clock and progress bar now react to the ← / → seek keys at once. A
+  press used to show up on screen only on the next clock tick, about a
+  quarter of a second later (measured: 257 ms); now it appears in the same
+  frame (under 1 ms). Peep shows the position plus any seek still waiting for
+  the player, so every press in a quick series moves the clock, instead of
+  only some of them.
+- A seek (and a volume change) now redraws as soon as the player has carried
+  it out; on both Linux and Windows that redraw used to wait for the next
+  tick.
+
 ## 0.2.7
 
 ### Faster

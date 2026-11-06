@@ -424,8 +424,9 @@ FUNC main, 16
     mov  A3, 64
     call read
     test rax, rax
-    jg   .woke
-    jmp  .loop
+    jle  .loop
+    mov  dword [dirty], 1              ; the player poked us (seek, new track):
+    jmp  .woke                         ; redraw now, not on the next tick
 .quit:
     xor  A1, A1
     call _exit

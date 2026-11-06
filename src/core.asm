@@ -37,7 +37,7 @@ extern codec_open, codec_read, codec_seek, codec_close
 global core_list_new, core_list_add, core_list_free, core_list_sort
 global core_publish, core_player, core_key
 global g_quit, g_ui, g_blank, g_paused, g_volstep
-global cur_idx, st_count, st_playing, st_rate, st_pos, st_total
+global cur_idx, st_count, st_playing, st_rate, st_pos, st_total, cmd_seek
 global pending_info, info_free, art_unref
 extern meta_parse, meta_art_ptr, meta_art_len, meta_done
 extern gfx_font_cycle
@@ -55,7 +55,9 @@ g_ui          dd 0          ; Tab: info overlay
 g_blank       dd 0          ; Shift+Tab: nothing at all, just black
 g_volstep     dd 20         ; 0..20
 cmd_skip      dd 0          ; tracks to move (+/-), accumulated
-cmd_seek      dd 0          ; seconds to seek (+/-), accumulated
+cmd_seek      dd 0          ; seconds to seek (+/-), accumulated; the UI shows
+                            ; st_pos + this, so keys register at once
+seek_taken    dd 0          ; the part of cmd_seek being carried out
 cmd_refill    dd 0          ; volume changed: re-render the queued audio
 art_thr       dq 0          ; cover-decoding thread, 0 when none
 job_info      dq 0          ; its track info
@@ -485,10 +487,10 @@ FUNC play_track, 0
     jmp  .flushout
 .noskip:
     ; --- seek -------------------------------------------------------------
-    xor  eax, eax
-    xchg eax, [cmd_seek]
-    test eax, eax
+    mov  eax, [cmd_seek]              ; taken, but only cleared once st_pos has
+    test eax, eax                     ; moved, so the clock never jumps back
     jz   .noseek
+    mov  [seek_taken], eax
     movsxd rax, eax
     mov  ecx, [st_rate]
     imul rax, rcx
@@ -502,14 +504,18 @@ FUNC play_track, 0
     cmp  rax, rcx
     jb   .sk3
     inc  dword [cur_idx]              ; seeking past the end = next track
+    mov  eax, [seek_taken]
+    lock sub [cmd_seek], eax
     jmp  .flushout
 .sk3:
     mov  rbx, rax
     mov  A1, rbx
     call dec_seek
     mov  [st_pos], rbx
+    mov  eax, [seek_taken]
+    lock sub [cmd_seek], eax          ; st_pos has it now
     call plat_audio_flush
-    call plat_wake                    ; show the new time now, not on the next tick
+    call plat_wake                    ; redraw with the real position
 .noseek:
     ; --- volume -----------------------------------------------------------
     ; The device still holds up to ~100-200 ms mixed at the old volume. Drop

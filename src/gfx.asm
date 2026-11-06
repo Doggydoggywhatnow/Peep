@@ -13,7 +13,7 @@ default rel
 %include "abi.inc"
 
 extern g_ui, g_blank, g_paused, g_volstep
-extern cur_idx, st_count, st_playing, st_rate, st_pos, st_total
+extern cur_idx, st_count, st_playing, st_rate, st_pos, st_total, cmd_seek
 extern pending_info, info_free, core_key
 extern core_list_new, core_list_free, core_list_sort
 extern plat_ms, plat_map, plat_unmap, plat_title, plat_font_scan, plat_font_dir
@@ -1260,12 +1260,10 @@ FUNC overlay, 64
     mov  A4d, [L(24)]
     SET5 C_BAR_BG
     call fill_rect
+    call disp_pos
     mov  rcx, [st_total]
     test rcx, rcx
     jz   .nobar
-    mov  rax, [st_pos]
-    cmp  rax, rcx
-    cmova rax, rcx
     mov  edx, [rc_w]
     sub  edx, [L(4)]
     sub  edx, [L(4)]
@@ -1281,7 +1279,8 @@ FUNC overlay, 64
 .nobar:
     ; ---- time row, left: m:ss / m:ss
     lea  rbx, [tbuf]
-    FR2SEC [st_pos]
+    call disp_pos
+    FR2SEC rax
     mov  A1, rbx
     mov  A2, rax
     call s_time
@@ -1754,6 +1753,24 @@ FUNC core_note_size, 0
     jbe  .r
 .u: mov  dword [user_sized], 1
 .r: RET_
+
+; disp_pos() -> rax the position to show: where playback is plus any seek
+; still queued for the player thread (cmd_seek), clamped to the track. The
+; clock and bar then react to an arrow key in the same frame instead of
+; waiting for the player to carry it out. Leaf: clobbers rax, rcx.
+disp_pos:
+    movsxd rax, dword [cmd_seek]
+    mov  ecx, [st_rate]
+    imul rax, rcx
+    add  rax, [st_pos]
+    jns  .p
+    xor  eax, eax
+.p: mov  rcx, [st_total]
+    test rcx, rcx
+    jz   .r
+    cmp  rax, rcx
+    cmova rax, rcx
+.r: ret
 
 ; core_hover(inside): the pointer entered (1) or left (0) the window.
 ; -> eax 1 if a redraw is needed
