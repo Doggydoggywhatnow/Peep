@@ -2,6 +2,18 @@
 
 All notable changes to Peep.
 
+## 0.2.9
+
+### Faster
+- Peep does much less work while the info and controls are showing. The
+  clock changes once a second, but Peep used to redraw and upload the whole
+  window four times a second, and kept doing it while paused. Now it wakes
+  once per second, exactly when the clock changes, and not at all while
+  paused. In a 1000x1000 window (measured, 10 seconds of playback):
+  - playing with the controls showing: 90 ms of CPU, down to 40 ms
+  - paused with the controls showing: 90 ms, down to about 10 ms
+- The progress bar now advances once a second, together with the clock.
+
 ## 0.2.8
 
 ### Fixed

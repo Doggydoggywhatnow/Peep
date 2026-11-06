@@ -11,7 +11,7 @@ default rel
 extern core_list_new, core_list_add, core_list_free, core_publish
 extern core_player, core_key, core_render, g_quit, g_ui
 extern core_take_info, core_target_size, core_note_size, core_art_aspect
-extern core_next_wake, core_click, core_hover
+extern core_next_wake, core_click, core_hover, core_tick_needed
 
 extern XOpenDisplay, XDefaultScreen, XRootWindow, XCreateSimpleWindow
 extern XStoreName, XSetClassHint, XSelectInput, XInternAtoms, XSetWMProtocols
@@ -417,7 +417,8 @@ FUNC main, 16
     call poll
     test eax, eax
     jnz  .woke
-    mov  dword [dirty], 1              ; timer tick
+    call core_tick_needed              ; timer tick: redraw only if it shows
+    mov  [dirty], eax                  ; something new
 .woke:
     mov  A1d, [wake_fd]                ; drain the wake pipe
     lea  A2, [wake_buf]

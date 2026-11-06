@@ -25,7 +25,7 @@ extern font_glyph, font_glyph_free
 
 global core_render, core_click, core_take_info, core_target_size
 global core_note_size, core_art_aspect, core_next_wake, gfx_font_cycle
-global core_hover
+global core_hover, core_tick_needed
 
 ; colours (0x00RRGGBB)
 C_TITLE   equ 0x00F2F2F2
@@ -90,6 +90,8 @@ hover       resd 1             ; the pointer is over the window
 ui_a        resd 1             ; overlay opacity this frame, 0..256
 leave_ms    resq 1             ; when the pointer left
 ov_top      resd 1             ; first row the overlay drew on (fade from here)
+last_sec    resq 1             ; the clock reading in the last frame drawn
+drawn_a     resd 1             ; overlay opacity in the last frame (0: none drawn)
 GC_N        equ 512            ; glyph cache entries (direct mapped)
 GC_SZ       equ 32             ; cp, px, bitmap, w, h, xoff, yoff
 alignb 8
@@ -1487,6 +1489,9 @@ FUNC core_render, 0
     mov  [rc_w], A2d
     mov  [rc_h], A3d
     mov  dword [btn_ok], 0
+    mov  dword [drawn_a], 0
+    call disp_secs                     ; remember what the clock shows now, so
+    mov  [last_sec], rax               ; a tick can tell if it must redraw
     call plat_ms
     cmp  qword [dlg_until], 0
     je   .t
@@ -1532,6 +1537,7 @@ FUNC core_render, 0
     test eax, eax
     jz   .dlg
     mov  [ui_a], eax
+    mov  [drawn_a], eax
     call overlay
     cmp  dword [ui_a], 256
     jae  .dlg
@@ -1772,6 +1778,42 @@ disp_pos:
     cmova rax, rcx
 .r: ret
 
+; disp_secs() -> rax whole seconds shown on the clock. Leaf-ish: clobbers
+; rax, rcx, rdx.
+disp_secs:
+    call disp_pos
+    mov  ecx, [st_rate]
+    test ecx, ecx
+    jnz  .ok
+    mov  ecx, 1
+.ok:xor  edx, edx
+    div  rcx
+    ret
+
+; core_tick_needed() -> eax 1 if a timer tick has anything new to draw. The
+; clock only changes once a second, so most ticks need no redraw at all.
+FUNC core_tick_needed, 0
+    mov  eax, 1
+    cmp  qword [dlg_until], 0          ; a notice is up: it may expire
+    jne  .r
+    call ui_alpha
+    test eax, eax
+    jnz  .vis
+    cmp  dword [drawn_a], 0            ; controls just went away: one last
+    jne  .yes                          ; frame to wipe them
+    jmp  .no
+.vis:
+    cmp  eax, 256
+    jb   .yes                          ; fading out: every frame counts
+    call disp_secs
+    cmp  rax, [last_sec]
+    jne  .yes
+.no:xor  eax, eax
+    RET_
+.yes:
+    mov  eax, 1
+.r: RET_
+
 ; core_hover(inside): the pointer entered (1) or left (0) the window.
 ; -> eax 1 if a redraw is needed
 FUNC core_hover, 0
@@ -1907,11 +1949,30 @@ FUNC core_next_wake, 0
     mov  ebx, 16
     jmp  .r
 .clk:
+    ; The clock moves once a second: sleep until the next whole second,
+    ; and not at all while paused or stopped.
     cmp  dword [st_count], 0
     je   .r
-    cmp  ebx, 250
-    jbe  .r
-    mov  ebx, 250
+    cmp  dword [st_playing], 0
+    je   .r
+    cmp  dword [g_paused], 0
+    jne  .r
+    mov  ecx, [st_rate]
+    test ecx, ecx
+    jz   .r
+    mov  rax, [st_pos]
+    xor  edx, edx
+    div  rcx                           ; rdx = frames into this second
+    sub  rcx, rdx                      ; frames left in it
+    imul rcx, 1000
+    mov  rax, rcx
+    xor  edx, edx
+    mov  ecx, [st_rate]
+    div  rcx
+    add  eax, 4                        ; land just after the boundary
+    cmp  eax, ebx
+    jae  .r                            ; a notice expires sooner
+    mov  ebx, eax
 .r: mov  eax, ebx
     RET_
 

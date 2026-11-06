@@ -10,7 +10,7 @@ default rel
 extern core_list_new, core_list_add, core_list_free, core_publish
 extern core_player, core_key, core_render, g_quit, g_ui
 extern core_take_info, core_target_size, core_note_size, core_art_aspect
-extern core_next_wake, core_click, core_hover
+extern core_next_wake, core_click, core_hover, core_tick_needed
 
 extern GetModuleHandleW, LoadIconW, LoadCursorW, GetStockObject, RegisterClassExW
 extern CreateWindowExW, ShowWindow, GetMessageW, TranslateMessage, DispatchMessageW
@@ -318,12 +318,17 @@ FUNC wndproc, 80                       ; PAINTSTRUCT (72)
     jmp  .inval
 .timer:
     cmp  r13, T_FIRST
-    jne  .inval
+    jne  .tick
     mov  A1, rbx
     mov  A2, T_FIRST
     call KillTimer
     call show_once                     ; the cover is late: show the window anyway
     jmp  .zero
+.tick:                                 ; clock tick: paint only if it shows
+    call core_tick_needed              ; something new, then re-aim the timer
+    test eax, eax
+    jnz  .inval
+    jmp  .rearm
 .click:
     movsx A1d, r14w                    ; x
     mov  eax, r14d
@@ -420,6 +425,7 @@ FUNC wndproc, 80                       ; PAINTSTRUCT (72)
     mov  A1, rbx
     lea  A2, [L(0)]
     call EndPaint
+.rearm:
     call core_next_wake                ; next redraw: clock tick, notice expiry
     test eax, eax
     js   .notimer
