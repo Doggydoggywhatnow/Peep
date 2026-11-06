@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Peep
+Comment=A tiny private music player
+Exec=peep %F
+Icon=peep
+Terminal=false
+Categories=AudioVideo;Audio;Player;
+MimeType=audio/mpeg;audio/flac;audio/x-flac;audio/ogg;audio/x-vorbis+ogg;audio/wav;audio/x-wav;inode/directory;
+StartupWMClass=Peep
