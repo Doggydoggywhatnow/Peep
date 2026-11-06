@@ -3,6 +3,7 @@
 #   make            Linux binary   build/peep
 #   make exe        Windows binary build/Peep.exe   (mingw-w64 cross compiler)
 #   make appimage   build/Peep-x86_64.AppImage
+#   make deb        build/peep_<version>_amd64.deb (Debian / Ubuntu package)
 #   make pure       Linux, zero C: native WAV decoder only
 #   make all        everything
 
@@ -15,7 +16,7 @@ CODEC_CFLAGS = -Os -fno-asynchronous-unwind-tables -fno-stack-protector -w
 B := build
 CORE_DEPS := src/abi.inc src/font.inc
 
-.PHONY: linux exe pure appimage all clean
+.PHONY: linux exe pure appimage deb all clean
 linux: $(B)/peep
 
 $(B):
@@ -80,7 +81,25 @@ $(B)/Peep-x86_64.AppImage: $(B)/peep res/peep.desktop res/peep.png
 	rm -f $(B)/peep.squashfs
 appimage: $(B)/Peep-x86_64.AppImage
 
-all: linux pure exe appimage
+# ---- Debian / Ubuntu package ----------------------------------------------
+# The version comes from the README title ("# Peep X.Y.Z").
+VERSION := $(shell sed -n '1s/^# Peep //p' README.md)
+DEB := $(B)/peep_$(VERSION)_amd64.deb
+$(DEB): $(B)/peep res/peep.desktop res/peep.png res/copyright CHANGELOG.md
+	rm -rf $(B)/debroot
+	install -Dm755 $(B)/peep $(B)/debroot/usr/bin/peep
+	install -Dm644 res/peep.desktop $(B)/debroot/usr/share/applications/peep.desktop
+	install -Dm644 res/peep.png $(B)/debroot/usr/share/icons/hicolor/256x256/apps/peep.png
+	install -Dm644 res/copyright $(B)/debroot/usr/share/doc/peep/copyright
+	gzip -9n < CHANGELOG.md > $(B)/debroot/usr/share/doc/peep/changelog.gz
+	mkdir -p $(B)/debroot/DEBIAN
+	sed -e 's/@VERSION@/$(VERSION)/' \
+	    -e "s/@SIZE@/$$(du -sk $(B)/debroot/usr | cut -f1)/" \
+	    res/deb-control > $(B)/debroot/DEBIAN/control
+	dpkg-deb --root-owner-group -Zxz --build $(B)/debroot $@
+deb: $(DEB)
+
+all: linux pure exe appimage deb
 
 clean:
 	rm -rf $(B)

@@ -5,6 +5,9 @@ All notable changes to Peep.
 ## 0.2.6
 
 ### Added
+- A Debian / Ubuntu package, `peep_0.2.6_amd64.deb`, built with `make deb`.
+  It installs Peep with a menu entry and icon; install it with
+  `sudo apt install ./peep_0.2.6_amd64.deb`.
 - The README explains the philosophy behind Peep: why the cover is the
   interface, why there's no library or settings, and why it stays local.
 

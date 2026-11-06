@@ -16,6 +16,7 @@ writes to disk.
 | Download | Platform |
 |---|---|
 | [`Peep-0.2.6-x86_64.AppImage`](releases/Peep-0.2.6-x86_64.AppImage) | Linux x86-64 |
+| [`peep_0.2.6_amd64.deb`](releases/peep_0.2.6_amd64.deb) | Ubuntu 22.04+ / Debian 12+ (x86-64) |
 | [`Peep-0.2.6.exe`](releases/Peep-0.2.6.exe) | Windows x64 |
 
 ## Philosophy
@@ -133,6 +134,7 @@ development headers. For Windows you need `mingw-w64`, and for the AppImage,
 make            # build/peep
 make pure       # build/peep-pure   (assembly-only)
 make exe        # build/Peep.exe    (cross-compiled)
+make deb        # build/peep_<version>_amd64.deb   (needs dpkg-deb)
 make appimage RUNTIME=/path/to/runtime-x86_64
                 # runtime from github.com/AppImage/type2-runtime/releases
 ```

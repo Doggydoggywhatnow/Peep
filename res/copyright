@@ -1,0 +1,20 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: Peep
+Source: https://github.com/Doggydoggywhatnow/Peep
+
+Files: *
+Copyright: Doggydoggywhatnow
+License: none-stated
+ The author has not published a license for Peep itself.
+
+Files: third_party/dr_mp3.h third_party/dr_flac.h third_party/dr_wav.h
+Copyright: David Reid
+License: public-domain or MIT-0
+ Choice of public domain (Unlicense) or MIT No Attribution, as stated at
+ the end of each file.
+
+Files: third_party/stb_image.h third_party/stb_truetype.h third_party/stb_vorbis.c
+Copyright: Sean Barrett and contributors
+License: public-domain or MIT
+ Choice of public domain (Unlicense) or MIT, as stated at the end of each
+ file.

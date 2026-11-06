@@ -1,0 +1,17 @@
+Package: peep
+Version: @VERSION@
+Architecture: amd64
+Maintainer: Doggydoggywhatnow <121328439+Doggydoggywhatnow@users.noreply.github.com>
+Installed-Size: @SIZE@
+Depends: libc6 (>= 2.34), libx11-6, libxext6, libasound2t64 | libasound2
+Section: sound
+Priority: optional
+Homepage: https://github.com/Doggydoggywhatnow/Peep
+Description: music player that is just a screen
+ Peep opens as a black square. Drop a folder or files on it and it plays
+ them, showing the album cover from the files' own tags; the window takes
+ the cover's shape. Tab shows the track info and controls while the pointer
+ is over the window.
+ .
+ Written in x86-64 assembly. No network code, no telemetry, no library
+ database, and it never writes to disk.
