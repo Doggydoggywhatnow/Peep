@@ -1,4 +1,4 @@
-# Peep 0.2.5
+# Peep 0.2.6
 
 A music player that is just a screen.
 
@@ -15,8 +15,34 @@ writes to disk.
 
 | Download | Platform |
 |---|---|
-| [`Peep-0.2.5-x86_64.AppImage`](releases/Peep-0.2.5-x86_64.AppImage) | Linux x86-64 |
-| [`Peep-0.2.5.exe`](releases/Peep-0.2.5.exe) | Windows x64 |
+| [`Peep-0.2.6-x86_64.AppImage`](releases/Peep-0.2.6-x86_64.AppImage) | Linux x86-64 |
+| [`Peep-0.2.6.exe`](releases/Peep-0.2.6.exe) | Windows x64 |
+
+## Philosophy
+
+Most music players are built around *managing* music: libraries, playlists,
+ratings, recommendations. Peep is built around *listening* to it.
+
+* **The cover is the interface.** Album art was made to be looked at while
+  the music plays. Peep gives it the whole window and takes its shape, so
+  nothing competes with it. The controls exist, but stay out of sight until
+  you reach for them, and fade away when you move on.
+* **Nothing is also an option.** Shift+Tab leaves only black. Sometimes the
+  best thing a player can show is nothing at all.
+* **Your files are the library.** Your folders are already an order you
+  chose. Peep reads titles, artists and covers straight from the files' own
+  tags and plays in path order: no import step, no database to build or keep
+  in sync.
+* **It stays on your machine.** No network code, no telemetry, no accounts,
+  and nothing written to disk. Peep can't share what you listen to because
+  it has nowhere to send it, and it leaves no trace when it closes.
+* **Small and immediate.** Assembly plus a handful of public-domain
+  decoders: a single file of about 1 MB on Linux and 300 KB on Windows, with
+  no installer and no runtime. It sleeps when nothing is happening and
+  answers a key press at once.
+* **Fewer features, on purpose.** Every feature has to earn its place against
+  a quiet screen. There is no settings window, equalizer or visualizer. What
+  is there works with a key, a click or a drag.
 
 ## Use
 

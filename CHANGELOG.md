@@ -2,6 +2,12 @@
 
 All notable changes to Peep.
 
+## 0.2.6
+
+### Added
+- The README explains the philosophy behind Peep: why the cover is the
+  interface, why there's no library or settings, and why it stays local.
+
 ## 0.2.5
 
 ### Faster

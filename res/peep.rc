@@ -9,7 +9,7 @@ BEGIN
     BEGIN
       VALUE "FileDescription", "Peep music player"
       VALUE "ProductName", "Peep"
-      VALUE "FileVersion", "0.2.5"
+      VALUE "FileVersion", "0.2.6"
       VALUE "OriginalFilename", "Peep.exe"
     END
   END
