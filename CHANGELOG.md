@@ -2,6 +2,23 @@
 
 All notable changes to Peep.
 
+## 0.2.10
+
+### Fixed
+- Pausing now silences the music at once. Until now the sound device kept
+  playing the audio already queued for it, so sound carried on for 100 ms
+  or more after you pressed pause (measured: 100-123 ms). Peep now drops that
+  queue and rewinds to the exact point you heard, so the sound stops within
+  one audio chunk (about 20 ms, measured 6-22 ms) and resuming carries on
+  from exactly where it stopped, with no gap and nothing repeated. The clock
+  shows the heard position while paused.
+
+### Checked, no change needed
+- Quitting takes about 2-3 ms in every state (playing, paused, mid-seek,
+  mid-skip).
+- Moving on to the next track leaves no silent gap, even for MP3s with
+  large covers.
+
 ## 0.2.9
 
 ### Faster

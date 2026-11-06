@@ -58,6 +58,7 @@ cmd_skip      dd 0          ; tracks to move (+/-), accumulated
 cmd_seek      dd 0          ; seconds to seek (+/-), accumulated; the UI shows
                             ; st_pos + this, so keys register at once
 seek_taken    dd 0          ; the part of cmd_seek being carried out
+pause_done    dd 0          ; the queued audio was dropped for this pause
 cmd_refill    dd 0          ; volume changed: re-render the queued audio
 art_thr       dq 0          ; cover-decoding thread, 0 when none
 job_info      dq 0          ; its track info
@@ -542,10 +543,32 @@ FUNC play_track, 0
 .novol:
     cmp  dword [g_paused], 0
     je   .play
+    ; --- paused: silence now ------------------------------------------------
+    ; The device still holds up to ~100+ ms that would play on after the key.
+    ; Drop it and rewind the decoder to the point actually heard, so the sound
+    ; stops at once and a resume carries on from exactly where it stopped.
+    cmp  dword [pause_done], 0
+    jne  .sleep
+    mov  dword [pause_done], 1
+    call plat_audio_queued
+    test rax, rax
+    jle  .sleep
+    mov  rbx, [st_pos]
+    sub  rbx, rax
+    jns  .p1
+    xor  ebx, ebx
+.p1:
+    call plat_audio_flush
+    mov  A1, rbx
+    call dec_seek
+    mov  [st_pos], rbx
+    call plat_wake                    ; the clock shows the heard position
+.sleep:
     mov  A1, 15
     call plat_sleep
     jmp  .loop
 .play:
+    mov  dword [pause_done], 0
     lea  A1, [decbuf]
     mov  A2, CHUNK
     call dec_read
