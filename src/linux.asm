@@ -11,7 +11,7 @@ default rel
 extern core_list_new, core_list_add, core_list_free, core_publish
 extern core_player, core_key, core_render, g_quit, g_ui
 extern core_take_info, core_target_size, core_note_size, core_art_aspect
-extern core_next_wake, core_click
+extern core_next_wake, core_click, core_hover
 
 extern XOpenDisplay, XDefaultScreen, XRootWindow, XCreateSimpleWindow
 extern XStoreName, XSetClassHint, XSelectInput, XInternAtom, XSetWMProtocols
@@ -21,6 +21,7 @@ extern XPutImage, XFlush, XSendEvent, XConvertSelection, XGetWindowProperty
 extern XFree, XCreateBitmapFromData, XCreatePixmapCursor, XDefineCursor
 extern XUndefineCursor, XResizeWindow, XSetWMNormalHints, XDisplayWidth
 extern XDisplayHeight, XSetWindowBackgroundPixmap
+extern XUngrabPointer
 extern XSyncQueryExtension, XSyncInitialize, XSyncCreateCounter, XSyncSetCounter
 extern snd_pcm_open, snd_pcm_set_params, snd_pcm_writei, snd_pcm_recover
 extern snd_pcm_drop, snd_pcm_prepare, snd_pcm_drain, snd_pcm_close
@@ -36,13 +37,16 @@ global plat_wake, plat_ms, plat_font_scan, plat_font_dir
 ; X11 constants
 KeyPress        equ 2
 ButtonPress     equ 4
+EnterNotify     equ 7
+LeaveNotify     equ 8
+NotifyGrab      equ 1
 Expose          equ 12
 ConfigureNotify equ 22
 SelectionNotify equ 31
 ClientMessage   equ 33
 XA_ATOM         equ 4
 XA_CARDINAL     equ 6
-EV_MASK         equ (1<<15) | 1 | (1<<2) | (1<<17) ; Exposure|KeyPress|ButtonPress|StructureNotify
+EV_MASK         equ (1<<15) | 1 | (1<<2) | (1<<17) | (1<<4) | (1<<5) ; Exposure|KeyPress|ButtonPress|StructureNotify|Enter|Leave
 START_SIZE      equ 480                        ; opens as a square
 SUBSTRUCT_MASK  equ (1<<19) | (1<<20)
 
@@ -53,6 +57,7 @@ align 8
 atom_names:
     dq n_proto, n_delete, n_sync, n_synccnt, n_aware, n_enter, n_pos, n_status, n_leave, n_drop
     dq n_finished, n_sel, n_copy, n_urilist, n_prop, n_wmstate, n_fs
+    dq n_moveresize
 NATOMS equ ($ - atom_names) / 8
 n_proto     db "WM_PROTOCOLS", 0
 n_delete    db "WM_DELETE_WINDOW", 0
@@ -71,6 +76,7 @@ n_urilist   db "text/uri-list", 0
 n_prop      db "PEEP_DROP", 0
 n_wmstate   db "_NET_WM_STATE", 0
 n_fs        db "_NET_WM_STATE_FULLSCREEN", 0
+n_moveresize db "_NET_WM_MOVERESIZE", 0
 
 s_title     db "Peep", 0
 s_class     db "Peep", 0
@@ -105,6 +111,7 @@ a_urilist   resq 1
 a_prop      resq 1
 a_wmstate   resq 1
 a_fs        resq 1
+a_moveresize resq 1
 dpy         resq 1
 scr         resd 1
 xfd         resd 1
@@ -476,6 +483,10 @@ FUNC on_event, 0
     je   .key
     cmp  eax, ButtonPress
     je   .button
+    cmp  eax, EnterNotify
+    je   .enter
+    cmp  eax, LeaveNotify
+    je   .leave
     cmp  eax, Expose
     je   .expose
     cmp  eax, ConfigureNotify
@@ -488,6 +499,20 @@ FUNC on_event, 0
 .expose:
     mov  dword [dirty], 1
     RET_
+.enter:
+    mov  A1, 1
+    call core_hover
+    or   [dirty], eax
+    RET_
+.leave:
+    ; a grab (the WM starting a window move) is not the pointer leaving;
+    ; the matching EnterNotify arrives when the grab ends
+    cmp  dword [ev + 80], NotifyGrab   ; XCrossingEvent.mode
+    je   .r
+    xor  A1, A1
+    call core_hover
+    or   [dirty], eax
+    RET_
 .button:
     cmp  dword [ev + 84], 1            ; left button
     jne  .r
@@ -495,6 +520,11 @@ FUNC on_event, 0
     mov  A2d, [ev + 68]
     call core_click
     or   [dirty], eax
+    test eax, eax
+    jnz  .r
+    cmp  dword [fullscreen], 0
+    jne  .r
+    call start_move                    ; not on a control: drag the window
     RET_
 .conf:
     mov  eax, [ev + 56]
@@ -758,6 +788,42 @@ FUNC toggle_fullscreen, 0
 .show:
     call XUndefineCursor
 .f: mov  A1, [dpy]
+    call XFlush
+    RET_
+
+; start_move(): hand a left-button drag to the window manager
+; (_NET_WM_MOVERESIZE, _NET_WM_MOVERESIZE_MOVE), so the window follows the
+; pointer the same way it does when dragged by a title bar
+FUNC start_move, 0
+    mov  A1, [dpy]
+    mov  A2, [ev + 56]                 ; XButtonEvent.time
+    call XUngrabPointer                ; release our implicit grab for the WM
+    lea  rdi, [sev]
+    xor  eax, eax
+    mov  ecx, 192/8
+    rep  stosq
+    mov  dword [sev], ClientMessage
+    mov  rax, [dpy]
+    mov  [sev + 24], rax
+    mov  rax, [win]
+    mov  [sev + 32], rax
+    mov  rax, [a_moveresize]
+    mov  [sev + 40], rax
+    mov  dword [sev + 48], 32
+    movsxd rax, dword [ev + 72]        ; x_root
+    mov  [sev + 56], rax
+    movsxd rax, dword [ev + 76]        ; y_root
+    mov  [sev + 64], rax
+    mov  qword [sev + 72], 8           ; _NET_WM_MOVERESIZE_MOVE
+    mov  qword [sev + 80], 1           ; button 1
+    mov  qword [sev + 88], 1           ; source: normal application
+    mov  A1, [dpy]
+    mov  A2, [root]
+    xor  A3, A3
+    mov  A4, SUBSTRUCT_MASK
+    lea  A5, [sev]
+    call XSendEvent
+    mov  A1, [dpy]
     call XFlush
     RET_
 

@@ -25,6 +25,7 @@ extern font_glyph, font_glyph_free
 
 global core_render, core_click, core_take_info, core_target_size
 global core_note_size, core_art_aspect, core_next_wake, gfx_font_cycle
+global core_hover
 
 ; colours (0x00RRGGBB)
 C_TITLE   equ 0x00F2F2F2
@@ -85,6 +86,9 @@ rc_buf      resq 1
 rc_w        resd 1
 rc_h        resd 1
 btn_ok      resd 1
+hover       resd 1             ; the pointer is over the window
+ui_a        resd 1             ; overlay opacity this frame, 0..256
+leave_ms    resq 1             ; when the pointer left
 btn         resd 12            ; 3 x (x0, y0, x1, y1)
 tl_bytes    resq 1
 ; scaler parameters
@@ -1502,20 +1506,29 @@ FUNC core_render, 0
     imul eax, [rc_h]
     lea  A3, [rax*4]
     call memcpy
-    cmp  dword [g_ui], 0
-    je   .dlg
+    call ui_alpha                      ; Tab on, and pointer over us (or fading)
+    test eax, eax
+    jz   .dlg
+    mov  [ui_a], eax
     call overlay
+    cmp  dword [ui_a], 256
+    jae  .dlg
+    call fade_overlay
 .dlg:
     cmp  qword [dlg_until], 0
     je   .r
     call dialog
 .r: RET_
 
-; core_click(x, y) -> eax 1 if redraw needed
+; core_click(x, y) -> eax 1 if a control was hit (0: the click is free,
+; e.g. for dragging the window)
 FUNC core_click, 0
     ARGS r12, r13
     cmp  dword [btn_ok], 0
     je   .no
+    call ui_alpha
+    test eax, eax
+    jz   .no
     cmp  dword [g_ui], 0
     je   .no
     cmp  dword [g_blank], 0
@@ -1719,6 +1732,108 @@ FUNC core_note_size, 0
 .u: mov  dword [user_sized], 1
 .r: RET_
 
+; core_hover(inside): the pointer entered (1) or left (0) the window.
+; -> eax 1 if a redraw is needed
+FUNC core_hover, 0
+    ARGS r12
+    cmp  r12d, [hover]
+    je   .no
+    mov  [hover], r12d
+    test r12d, r12d
+    jnz  .yes
+    call plat_ms
+    mov  [leave_ms], rax
+.yes:
+    xor  eax, eax
+    cmp  dword [g_ui], 0
+    setne al
+    RET_
+.no:xor  eax, eax
+    RET_
+
+; ui_alpha() -> eax overlay opacity 0..256: full while the pointer is over
+; the window, then a FADE_MS fade-out after it leaves. 0 when Tab is off.
+FADE_MS equ 500
+FUNC ui_alpha, 0
+    xor  ebx, ebx
+    cmp  dword [g_ui], 0
+    je   .r
+    cmp  dword [g_blank], 0
+    jne  .r
+    mov  ebx, 256
+    cmp  dword [hover], 0
+    jne  .r
+    call plat_ms
+    sub  rax, [leave_ms]
+    xor  ebx, ebx
+    cmp  rax, FADE_MS
+    jae  .r
+    mov  ecx, FADE_MS
+    sub  rcx, rax                      ; time left
+    shl  rcx, 8
+    mov  rax, rcx
+    xor  edx, edx
+    mov  ecx, FADE_MS
+    div  rcx
+    mov  ebx, eax
+.r: mov  eax, ebx
+    RET_
+
+; fade_overlay(): rc_buf = cache + (rc_buf - cache) * ui_a/256, the frame
+; with controls blended back toward the bare cover. SSE2, 4 pixels a step.
+FUNC fade_overlay, 0
+    mov  rdi, [rc_buf]
+    mov  rsi, [cache_px]
+    mov  ecx, [rc_w]
+    imul ecx, [rc_h]
+    shl  rcx, 2                        ; bytes
+    mov  eax, [ui_a]
+    shr  eax, 1                        ; 0..128: products fit in a signed word
+    mov  ebx, eax
+    movd xmm5, eax
+    pshuflw xmm5, xmm5, 0
+    punpcklqdq xmm5, xmm5
+    pxor xmm4, xmm4
+.v: cmp  rcx, 16
+    jb   .tail
+    movdqu xmm0, [rdi]
+    movdqu xmm1, [rsi]
+    movdqa xmm2, xmm0
+    punpcklbw xmm2, xmm4
+    movdqa xmm3, xmm1
+    punpcklbw xmm3, xmm4
+    psubw xmm2, xmm3
+    pmullw xmm2, xmm5
+    psraw xmm2, 7
+    paddw xmm2, xmm3
+    punpckhbw xmm0, xmm4
+    punpckhbw xmm1, xmm4
+    psubw xmm0, xmm1
+    pmullw xmm0, xmm5
+    psraw xmm0, 7
+    paddw xmm0, xmm1
+    packuswb xmm2, xmm0
+    movdqu [rdi], xmm2
+    add  rdi, 16
+    add  rsi, 16
+    sub  rcx, 16
+    jmp  .v
+.tail:
+    test rcx, rcx
+    jz   .r
+    movzx eax, byte [rdi]
+    movzx edx, byte [rsi]
+    sub  eax, edx
+    imul eax, ebx
+    sar  eax, 7
+    add  eax, edx
+    mov  [rdi], al
+    inc  rdi
+    inc  rsi
+    dec  rcx
+    jmp  .tail
+.r: RET_
+
 ; core_next_wake() -> eax milliseconds until a redraw is due, -1 if none
 FUNC core_next_wake, 0
     mov  ebx, -1
@@ -1734,10 +1849,16 @@ FUNC core_next_wake, 0
     jb   .s
     mov  ecx, 10000
 .s: mov  ebx, ecx
-.ui:cmp  dword [g_ui], 0
-    je   .r
-    cmp  dword [g_blank], 0
-    jne  .r
+.ui:call ui_alpha
+    test eax, eax
+    jz   .r
+    cmp  dword [hover], 0
+    jne  .clk
+    cmp  ebx, 16                       ; fading: ~60 frames a second
+    jbe  .r
+    mov  ebx, 16
+    jmp  .r
+.clk:
     cmp  dword [st_count], 0
     je   .r
     cmp  ebx, 250

@@ -1,11 +1,12 @@
-# Peep 0.2.2
+# Peep 0.2.3
 
 A music player that is just a screen.
 
 Peep opens as a black square. Drop a folder or some files on it and it
 plays them, showing the album cover from the file's own tags. The window
-takes the cover's shape, and you can drag it to any size. Press **Tab** to
-show the track info and controls. Press **Shift+Tab** for nothing at all,
+takes the cover's shape, and you can drag it to any size, or click and drag
+the cover to move it. Press **Tab** to show the track info and controls
+whenever the pointer is over the window. Press **Shift+Tab** for nothing at all,
 only black, while the music keeps playing.
 
 Peep is machine-written x86-64 assembly. It runs entirely on your own machine.
@@ -14,8 +15,8 @@ writes to disk.
 
 | Download | Platform |
 |---|---|
-| [`Peep-0.2.2-x86_64.AppImage`](releases/Peep-0.2.2-x86_64.AppImage) | Linux x86-64 |
-| [`Peep-0.2.2.exe`](releases/Peep-0.2.2.exe) | Windows x64 |
+| [`Peep-0.2.3-x86_64.AppImage`](releases/Peep-0.2.3-x86_64.AppImage) | Linux x86-64 |
+| [`Peep-0.2.3.exe`](releases/Peep-0.2.3.exe) | Windows x64 |
 
 ## Use
 
@@ -36,7 +37,7 @@ writes to disk.
 
 | Key | Action |
 |---|---|
-| Tab | show / hide info and controls |
+| Tab | info and controls on / off (shown while the pointer is over the window) |
 | Shift+Tab | blank: black screen, music continues (again to restore) |
 | F | next font (cycles through the fonts folder, then back to Default) |
 | Space | pause / resume |
@@ -47,7 +48,10 @@ writes to disk.
 | F11 | fullscreen (pointer hidden); Esc leaves it |
 | Q | quit |
 
-The overlay's **⏮ ⏯ ⏭** buttons are clickable.
+With Tab on, the info and controls appear while the pointer is over the
+window and fade out half a second after it leaves. The **⏮ ⏯ ⏭** buttons
+are clickable. Click and drag anywhere else on the cover to move the window
+(not in fullscreen).
 
 ### Custom fonts
 

@@ -10,12 +10,13 @@ default rel
 extern core_list_new, core_list_add, core_list_free, core_publish
 extern core_player, core_key, core_render, g_quit, g_ui
 extern core_take_info, core_target_size, core_note_size, core_art_aspect
-extern core_next_wake, core_click
+extern core_next_wake, core_click, core_hover
 
 extern GetModuleHandleW, LoadIconW, LoadCursorW, GetStockObject, RegisterClassExW
 extern CreateWindowExW, ShowWindow, GetMessageW, TranslateMessage, DispatchMessageW
 extern DefWindowProcW, PostQuitMessage, DestroyWindow, InvalidateRect, BeginPaint
-extern UpdateWindow
+extern UpdateWindow, TrackMouseEvent, ReleaseCapture, SendMessageW
+extern GetCursorPos, WindowFromPoint
 extern EndPaint, StretchDIBits, SetTimer, KillTimer, AdjustWindowRect, SetCursor
 extern GetWindowLongW, SetWindowLongW, GetWindowPlacement, SetWindowPlacement
 extern SetWindowPos, MonitorFromWindow, GetMonitorInfoW, SetProcessDPIAware
@@ -45,6 +46,12 @@ WM_TIMER        equ 0x0113
 WM_DROPFILES    equ 0x0233
 WM_LBUTTONDOWN  equ 0x0201
 WM_SIZING       equ 0x0214
+WM_MOUSEMOVE    equ 0x0200
+WM_MOUSELEAVE   equ 0x02A3
+WM_NCLBUTTONDOWN equ 0x00A1
+WM_EXITSIZEMOVE equ 0x0232
+HTCAPTION       equ 2
+TME_LEAVE       equ 2
 WM_APP          equ 0x8000
 START_SIZE      equ 480                ; opens as a square
 WS_OVERLAPPEDWINDOW equ 0x00CF0000
@@ -71,6 +78,9 @@ fb_w        resd 1
 fb_h        resd 1
 bmi         resb 44
 fullscreen  resd 1
+tracking    resd 1                 ; TrackMouseEvent armed: the pointer is over us
+tme         resb 24                ; TRACKMOUSEEVENT
+cur_pt      resq 1                 ; POINT
 alignb 8
 saved_wp    resb 48           ; WINDOWPLACEMENT (44)
 mon_info    resb 40           ; MONITORINFO
@@ -231,6 +241,12 @@ FUNC wndproc, 80                       ; PAINTSTRUCT (72)
     je   .click
     cmp  r12d, WM_SIZING
     je   .sizing
+    cmp  r12d, WM_MOUSEMOVE
+    je   .mmove
+    cmp  r12d, WM_MOUSELEAVE
+    je   .mleave
+    cmp  r12d, WM_EXITSIZEMOVE
+    je   .exitmove
     cmp  r12d, WM_ERASEBKGND
     je   .one
     cmp  r12d, WM_DROPFILES
@@ -290,7 +306,47 @@ FUNC wndproc, 80                       ; PAINTSTRUCT (72)
     call core_click
     test eax, eax
     jnz  .inval
+    cmp  dword [fullscreen], 0
+    jne  .zero
+    ; not on a control: drag the window as if by its title bar
+    call ReleaseCapture
+    mov  A1, rbx
+    mov  A2, WM_NCLBUTTONDOWN
+    mov  A3, HTCAPTION
+    xor  A4, A4
+    call SendMessageW
     jmp  .zero
+.mmove:                                ; pointer over the window: controls on
+    cmp  dword [tracking], 0
+    jne  .zero
+    mov  dword [tracking], 1
+    mov  dword [tme], 24               ; cbSize
+    mov  dword [tme + 4], TME_LEAVE
+    mov  [tme + 8], rbx                ; hwndTrack
+    mov  dword [tme + 16], 0
+    lea  A1, [tme]
+    call TrackMouseEvent
+    mov  A1, 1
+    call core_hover
+    test eax, eax
+    jnz  .inval
+    jmp  .zero
+.mleave:                               ; pointer gone: controls fade out
+    mov  dword [tracking], 0
+    xor  A1, A1
+    call core_hover
+    test eax, eax
+    jnz  .inval
+    jmp  .zero
+.exitmove:                             ; a drag ended: is the pointer still here?
+    mov  dword [tracking], 0
+    lea  A1, [cur_pt]
+    call GetCursorPos
+    mov  A1, [cur_pt]
+    call WindowFromPoint
+    cmp  rax, rbx
+    je   .mmove
+    jmp  .mleave
 .sizing:
     cmp  dword [art_w], 0
     je   .def

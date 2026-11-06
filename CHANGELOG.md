@@ -2,6 +2,17 @@
 
 All notable changes to Peep.
 
+## 0.2.3
+
+### Changed
+- With Tab on, the track info and controls now show only while the pointer
+  is over Peep's window. When the pointer leaves, they fade out over half a
+  second, leaving just the cover.
+
+### Added
+- Click and drag anywhere on the cover (away from the buttons) to move the
+  window, like dragging a title bar. Not available in fullscreen.
+
 ## 0.2.2
 
 ### Fixed
