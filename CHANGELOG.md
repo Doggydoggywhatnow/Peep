@@ -2,6 +2,14 @@
 
 All notable changes to Peep.
 
+## 0.2.12
+
+### Added
+- Press **V** to see which version of Peep you are running: "Peep 0.2.12"
+  appears in the top-left box for 2 seconds. It costs nothing while it's
+  hidden, and the version comes from the same place as the release, so it
+  can't go out of date.
+
 ## 0.2.11
 
 ### Added

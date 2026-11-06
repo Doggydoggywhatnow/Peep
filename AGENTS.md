@@ -17,7 +17,7 @@ Released under the Unlicense.
   code, no telemetry, nothing written to disk), never remove features without
   being told to, keep Linux and Windows both supported.
 * **Version bumps.** Any change to what ships (program, packages, README,
-  CHANGELOG, license) is a patch bump (0.2.11 -> 0.2.12). **Do not go to 1.0.0
+  CHANGELOG, license) is a patch bump (0.2.12 -> 0.2.13). **Do not go to 1.0.0
   unless the owner says so.** Contributor-only changes (this file, `tests/`)
   don't need one.
 * **Check before pushing** `main`: `git status`, `git log -3`,
@@ -90,7 +90,7 @@ sound card or window manager; see `tests/README.md`.
 ## Releasing
 
 1. Change the code and run `make test`. Fix failures; don't skip them.
-2. Bump the version everywhere it appears. `grep -rn "0.2.11\|0,2,11" .`:
+2. Bump the version everywhere it appears. `grep -rn "0.2.12\|0,2,12" .`:
    the README title and download table, `res/peep.rc` (**both** the numeric
    `FILEVERSION`/`PRODUCTVERSION` and the text `FileVersion`; the numeric
    ones were once forgotten), and `CHANGELOG.md`.
@@ -109,7 +109,9 @@ sound card or window manager; see `tests/README.md`.
 ## Pitfalls
 
 * `build/` is git-ignored build output; don't commit it. Python caches too.
-* The `.deb` takes its version from `# Peep X.Y.Z` on the README's first line.
+* The README's first line, `# Peep X.Y.Z`, is the source of the version for the
+  `.deb` and for the text the **V** key shows (the Makefile passes it to
+  `gfx.asm`). Change it first and rebuild.
 * Tests that act as a window manager must grant map *and* resize requests, or
   Peep's window stays the wrong size.
 * Measure before optimizing and keep numbers in the CHANGELOG; the decoders

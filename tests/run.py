@@ -457,6 +457,26 @@ def clock_cadence():
 
 
 @check
+def version_notice():
+    """V shows "Peep <version>" for 2 s, costs two frames in all, and matches the README."""
+    want = (ROOT / "README.md").read_text().splitlines()[0].removeprefix("# Peep ").strip()
+    assert re.fullmatch(r"\d+\.\d+\.\d+", want), "cannot read the version from the README"
+    assert ("Peep " + want).encode() in PEEP.read_bytes(), \
+        "this build does not contain 'Peep %s' (rebuild after changing the README)" % want
+    with peep([long_mp3()]):
+        drive("version")
+    frames, _, m = read_lat()
+    fr = [(t - m["VKEY"], h) for t, h in frames if m["VKEY"] <= t < m["END"]]
+    assert len(fr) == 2, "%d frames drawn for the version notice (want 2: show, hide)" % len(fr)
+    assert fr[0][0] < 20, "the notice took %.0f ms to appear" % fr[0][0]
+    assert 1900 <= fr[1][0] <= 2400, "the notice went away after %.2f s (want 2)" % (fr[1][0] / 1000)
+    assert fr[1][1] != fr[0][1], "the notice never changed the picture"
+    before = [h for t, h in frames if t < m["VKEY"]][-1]
+    assert fr[1][1] == before, "the notice left something on screen"
+    return "Peep %s shown for %.2f s, 2 frames" % (want, fr[1][0] / 1000)
+
+
+@check
 def quit_speed():
     """Q exits within milliseconds in every state."""
     pair = pair_dir()

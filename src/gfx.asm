@@ -25,7 +25,7 @@ extern font_glyph, font_glyph_free
 
 global core_render, core_click, core_take_info, core_target_size
 global core_note_size, core_art_aspect, core_next_wake, gfx_font_cycle
-global core_hover, core_tick_needed
+global core_hover, core_tick_needed, gfx_show_version
 
 ; colours (0x00RRGGBB)
 C_TITLE   equ 0x00F2F2F2
@@ -60,6 +60,12 @@ s_vol       db "vol ", 0
 s_dots      db "...", 0
 s_q         db "--:--", 0
 s_fontpfx   db "Font: ", 0
+; PEEP_VERSION comes from the README title (see the Makefile), so the version
+; Peep shows can't drift from the release.
+%ifndef PEEP_VERSION
+%define PEEP_VERSION "dev"
+%endif
+s_version   db "Peep ", PEEP_VERSION, 0
 s_default   db "Default", 0
 s_bad       db "  (can't read)", 0
 s_hint      db "put .ttf / .otf files in ", 0
@@ -2137,6 +2143,19 @@ FUNC gfx_font_cycle, 0
     add  rax, 2300
 .t: mov  [dlg_until], rax
 .r: RET_
+
+; gfx_show_version(): V — "Peep X.Y.Z" in the notice box for 2 s. No timer of
+; its own: the box expires through core_next_wake like any notice, so this
+; costs two frames (now, and when it goes) and nothing in between.
+FUNC gfx_show_version, 0
+    mov  byte [dlg2], 0                ; one line
+    lea  A1, [dlg1]
+    lea  A2, [s_version]
+    call s_cat
+    call plat_ms
+    add  rax, 2000
+    mov  [dlg_until], rax
+    RET_
 
 FUNC s_end, 0                          ; (str) -> pointer to its NUL
     mov  rax, A1

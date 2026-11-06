@@ -40,7 +40,7 @@ global g_quit, g_ui, g_blank, g_paused, g_volstep
 global cur_idx, st_count, st_playing, st_rate, st_pos, st_total, cmd_seek
 global pending_info, info_free, art_unref
 extern meta_parse, meta_art_ptr, meta_art_len, meta_done
-extern gfx_font_cycle
+extern gfx_font_cycle, gfx_show_version
 %ifndef PURE
 extern image_decode, image_free
 %endif
@@ -910,8 +910,13 @@ FUNC core_key, 0
     jmp  .yes
 .k10:
     cmp  eax, K_FONT
-    jne  .no
+    jne  .k11
     call gfx_font_cycle
+    jmp  .yes
+.k11:
+    cmp  eax, K_VERSION
+    jne  .no
+    call gfx_show_version
 .yes:
     mov  eax, 1
     RET_

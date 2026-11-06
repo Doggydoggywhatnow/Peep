@@ -12,6 +12,7 @@
  *   drive burst SEQ OUT.ppm    key burst (R, L, . = pause), then a screenshot
  *   drive pause plain|seek     pause/resume (optionally seeking while paused)
  *   drive tick                 how often the screen is redrawn
+ *   drive version              press V, watch the notice appear and expire
  *   drive quit PID MODE        time from Q to exit, MODE = playing|paused|...
  *   drive idle SECONDS         wait, then quit
  *   drive which                is the cover on screen the playing track's?
@@ -382,6 +383,20 @@ static void cmd_tick(void)
     key(XK_q);
 }
 
+/* ---- version ------------------------------------------------------------------ */
+static void cmd_version(void)
+{
+    need_window();
+    ms(1500);
+    mark("LATLOG", "MARK", "VKEY");
+    key(XK_v);
+    ms(500);
+    if (getenv("SHOT")) shot(getenv("SHOT")); /* optional: look at the notice */
+    ms(3000);
+    mark("LATLOG", "MARK", "END");
+    key(XK_q);
+}
+
 /* ---- quit -------------------------------------------------------------------- */
 static void cmd_quit(int pid, const char *mode)
 {
@@ -464,6 +479,7 @@ int main(int argc, char **argv)
     else if (!strcmp(c, "burst") && argc > 3) cmd_burst(argv[2], argv[3]);
     else if (!strcmp(c, "pause") && argc > 2) cmd_pause(argv[2]);
     else if (!strcmp(c, "tick")) cmd_tick();
+    else if (!strcmp(c, "version")) cmd_version();
     else if (!strcmp(c, "quit") && argc > 3) cmd_quit(atoi(argv[2]), argv[3]);
     else if (!strcmp(c, "idle") && argc > 2) cmd_idle(atoi(argv[2]));
     else if (!strcmp(c, "which")) cmd_which();

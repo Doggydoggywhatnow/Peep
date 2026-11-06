@@ -1,4 +1,4 @@
-# Peep 0.2.11
+# Peep 0.2.12
 
 A music player that is just a screen.
 
@@ -15,9 +15,9 @@ writes to disk.
 
 | Download | Platform |
 |---|---|
-| [`Peep-0.2.11-x86_64.AppImage`](releases/Peep-0.2.11-x86_64.AppImage) | Linux x86-64 |
-| [`peep_0.2.11_amd64.deb`](releases/peep_0.2.11_amd64.deb) | Ubuntu 22.04+ / Debian 12+ (x86-64) |
-| [`Peep-0.2.11.exe`](releases/Peep-0.2.11.exe) | Windows x64 |
+| [`Peep-0.2.12-x86_64.AppImage`](releases/Peep-0.2.12-x86_64.AppImage) | Linux x86-64 |
+| [`peep_0.2.12_amd64.deb`](releases/peep_0.2.12_amd64.deb) | Ubuntu 22.04+ / Debian 12+ (x86-64) |
+| [`Peep-0.2.12.exe`](releases/Peep-0.2.12.exe) | Windows x64 |
 
 ## Philosophy
 
@@ -67,6 +67,7 @@ ratings, recommendations. Peep is built around *listening* to it.
 | Tab | info and controls on / off (shown while the pointer is over the window) |
 | Shift+Tab | blank: black screen, music continues (again to restore) |
 | F | next font (cycles through the fonts folder, then back to Default) |
+| V | show the Peep version in the top-left box for 2 seconds |
 | Space | pause / resume |
 | ← / → | seek −10 s / +10 s |
 | ↑ / ↓ | volume |

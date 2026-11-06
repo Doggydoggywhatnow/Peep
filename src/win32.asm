@@ -504,6 +504,8 @@ FUNC wndproc, 80                       ; PAINTSTRUCT (72)
     je   .ktab
     cmp  eax, 'F'
     je   .kfont
+    cmp  eax, 'V'
+    je   .kver
     cmp  eax, 0x7A                     ; F11
     je   .kfs
     cmp  eax, 0x1B                     ; Esc leaves fullscreen
@@ -534,6 +536,8 @@ FUNC wndproc, 80                       ; PAINTSTRUCT (72)
     mov  ecx, K_BLANK
     jmp  .kcore
 .kfont:  mov ecx, K_FONT
+    jmp  .kcore
+.kver:   mov ecx, K_VERSION
 .kcore:
     mov  A1d, ecx
     call core_key

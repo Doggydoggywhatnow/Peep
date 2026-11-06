@@ -15,6 +15,10 @@ WINDRES  ?= x86_64-w64-mingw32-windres
 CODEC_CFLAGS = -Os -fno-asynchronous-unwind-tables -fno-stack-protector -w
 
 B := build
+# The version comes from the README title ("# Peep X.Y.Z"): the .deb uses it, and
+# gfx.asm shows it when V is pressed.
+VERSION := $(shell sed -n '1s/^# Peep //p' README.md)
+VERFLAG = -DPEEP_VERSION='"$(VERSION)"'
 CORE_DEPS := src/abi.inc src/font.inc
 
 .PHONY: linux exe pure appimage deb test all clean
@@ -32,10 +36,10 @@ $(B)/linux.o: src/linux.asm src/abi.inc | $(B)
 	$(NASM) -f elf64 -Isrc/ $< -o $@
 $(B)/meta.o: src/meta.asm src/abi.inc | $(B)
 	$(NASM) -f elf64 -Isrc/ $< -o $@
-$(B)/gfx.o: src/gfx.asm $(CORE_DEPS) | $(B)
-	$(NASM) -f elf64 -Isrc/ $< -o $@
-$(B)/gfx_pure.o: src/gfx.asm $(CORE_DEPS) | $(B)
-	$(NASM) -f elf64 -DPURE -Isrc/ $< -o $@
+$(B)/gfx.o: src/gfx.asm $(CORE_DEPS) README.md | $(B)
+	$(NASM) -f elf64 $(VERFLAG) -Isrc/ $< -o $@
+$(B)/gfx_pure.o: src/gfx.asm $(CORE_DEPS) README.md | $(B)
+	$(NASM) -f elf64 -DPURE $(VERFLAG) -Isrc/ $< -o $@
 $(B)/codecs.o: src/codecs.c | $(B)
 	$(CC) $(CODEC_CFLAGS) -c $< -o $@
 
@@ -53,8 +57,8 @@ $(B)/win32.obj: src/win32.asm src/abi.inc | $(B)
 	$(NASM) -f win64 -DWIN64 -Isrc/ $< -o $@
 $(B)/meta.obj: src/meta.asm src/abi.inc | $(B)
 	$(NASM) -f win64 -DWIN64 -Isrc/ $< -o $@
-$(B)/gfx.obj: src/gfx.asm $(CORE_DEPS) | $(B)
-	$(NASM) -f win64 -DWIN64 -Isrc/ $< -o $@
+$(B)/gfx.obj: src/gfx.asm $(CORE_DEPS) README.md | $(B)
+	$(NASM) -f win64 -DWIN64 $(VERFLAG) -Isrc/ $< -o $@
 $(B)/codecs.obj: src/codecs.c | $(B)
 	$(MINGW) $(CODEC_CFLAGS) -c $< -o $@
 $(B)/res.obj: res/peep.rc res/peep.ico | $(B)
@@ -83,8 +87,6 @@ $(B)/Peep-x86_64.AppImage: $(B)/peep res/peep.desktop res/peep.png
 appimage: $(B)/Peep-x86_64.AppImage
 
 # ---- Debian / Ubuntu package ----------------------------------------------
-# The version comes from the README title ("# Peep X.Y.Z").
-VERSION := $(shell sed -n '1s/^# Peep //p' README.md)
 DEB := $(B)/peep_$(VERSION)_amd64.deb
 $(DEB): $(B)/peep res/peep.desktop res/peep.png res/copyright CHANGELOG.md
 	rm -rf $(B)/debroot

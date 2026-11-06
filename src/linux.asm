@@ -602,6 +602,8 @@ FUNC on_event, 0
     je   .kblank
     cmp  rax, 'f'
     je   .kfont
+    cmp  rax, 'v'
+    je   .kver
     cmp  rax, 0xffc8                   ; F11
     je   .kfs
     cmp  rax, 0xff1b                   ; Escape leaves fullscreen
@@ -631,6 +633,8 @@ FUNC on_event, 0
 .kblank: mov ecx, K_BLANK
     jmp  .kcore
 .kfont:  mov ecx, K_FONT
+    jmp  .kcore
+.kver:   mov ecx, K_VERSION
 .kcore:
     mov  A1d, ecx
     call core_key
