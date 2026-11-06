@@ -1,4 +1,4 @@
-# Peep 0.2.0
+# Peep 0.2.1
 
 A music player that is just a screen.
 

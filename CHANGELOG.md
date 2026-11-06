@@ -2,7 +2,7 @@
 
 All notable changes to Peep.
 
-## Unreleased
+## 0.2.1
 
 ### Fixed
 - Album art no longer glitches while the window is being resized. On Windows
