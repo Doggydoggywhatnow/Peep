@@ -1,2 +1,4 @@
 # Build script: keep it out of GitHub's language statistics
 Makefile linguist-detectable=false
+# Test code and its helpers: also not part of the language statistics
+tests/** linguist-vendored

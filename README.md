@@ -1,4 +1,4 @@
-# Peep 0.2.10
+# Peep 0.2.11
 
 A music player that is just a screen.
 
@@ -15,9 +15,9 @@ writes to disk.
 
 | Download | Platform |
 |---|---|
-| [`Peep-0.2.10-x86_64.AppImage`](releases/Peep-0.2.10-x86_64.AppImage) | Linux x86-64 |
-| [`peep_0.2.10_amd64.deb`](releases/peep_0.2.10_amd64.deb) | Ubuntu 22.04+ / Debian 12+ (x86-64) |
-| [`Peep-0.2.10.exe`](releases/Peep-0.2.10.exe) | Windows x64 |
+| [`Peep-0.2.11-x86_64.AppImage`](releases/Peep-0.2.11-x86_64.AppImage) | Linux x86-64 |
+| [`peep_0.2.11_amd64.deb`](releases/peep_0.2.11_amd64.deb) | Ubuntu 22.04+ / Debian 12+ (x86-64) |
+| [`Peep-0.2.11.exe`](releases/Peep-0.2.11.exe) | Windows x64 |
 
 ## Philosophy
 
@@ -108,6 +108,7 @@ src/gfx.asm     cover scaling (box-filter halving + SSE2 bilinear), overlay,
 src/linux.asm   X11 window + XDND drag & drop, ALSA, aspect hints, resize sync, fonts dir
 src/win32.asm   Win32 window + WM_DROPFILES, waveOut, WM_SIZING aspect lock
 src/codecs.c    ~150-line shim over public-domain libraries (see below)
+tests/          the test suite: drives the real program (see tests/README.md)
 ```
 
 **About the C shim.** Peep's own code is all assembly. The shim connects it
@@ -137,6 +138,7 @@ make exe        # build/Peep.exe    (cross-compiled)
 make deb        # build/peep_<version>_amd64.deb   (needs dpkg-deb)
 make appimage RUNTIME=/path/to/runtime-x86_64
                 # runtime from github.com/AppImage/type2-runtime/releases
+make test       # run the test suite (about 2 minutes, see tests/README.md)
 ```
 
 ## Compatibility
@@ -147,3 +149,10 @@ make appimage RUNTIME=/path/to/runtime-x86_64
   honouring size hints; most floating WMs do, and tiling WMs ignore them.
 * **Windows**: Windows 7 or later, x64. The exe isn't code-signed, so
   SmartScreen will warn the first time it runs.
+
+## License
+
+Peep is released into the public domain under [the Unlicense](LICENSE): use it,
+change it and share it however you like, for any purpose, with no strings.
+The libraries it bundles are public domain or MIT-0/MIT, so the same applies
+to the combined program.

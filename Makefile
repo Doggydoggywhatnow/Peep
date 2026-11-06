@@ -5,6 +5,7 @@
 #   make appimage   build/Peep-x86_64.AppImage
 #   make deb        build/peep_<version>_amd64.deb (Debian / Ubuntu package)
 #   make pure       Linux, zero C: native WAV decoder only
+#   make test       run the test suite (tests/README.md)
 #   make all        everything
 
 NASM     ?= nasm
@@ -16,7 +17,7 @@ CODEC_CFLAGS = -Os -fno-asynchronous-unwind-tables -fno-stack-protector -w
 B := build
 CORE_DEPS := src/abi.inc src/font.inc
 
-.PHONY: linux exe pure appimage deb all clean
+.PHONY: linux exe pure appimage deb test all clean
 linux: $(B)/peep
 
 $(B):
@@ -98,6 +99,10 @@ $(DEB): $(B)/peep res/peep.desktop res/peep.png res/copyright CHANGELOG.md
 	    res/deb-control > $(B)/debroot/DEBIAN/control
 	dpkg-deb --root-owner-group -Zxz --build $(B)/debroot $@
 deb: $(DEB)
+
+# ---- Tests -----------------------------------------------------------------
+test: $(B)/peep
+	python3 tests/run.py
 
 all: linux pure exe appimage deb
 

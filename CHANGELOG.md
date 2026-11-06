@@ -2,6 +2,20 @@
 
 All notable changes to Peep.
 
+## 0.2.11
+
+### Added
+- Peep is now released under the Unlicense (public domain). See `LICENSE`.
+- A test suite, in `tests/` (run it with `make test`). It starts the real
+  program on a virtual display, plays generated media through a model sound
+  device, and checks the behaviour that matters: the clock reacts to a seek
+  key in the same frame, pause silences the music at once and resume loses
+  nothing, redraws happen only when something changed, controls fade out
+  without a trace, no silence between tracks, the right cover for the right
+  track, exact seeking in every format, and no memory errors under stress.
+  Run against the 0.2.6 build, the seek, pause and redraw checks fail, as
+  they should.
+
 ## 0.2.10
 
 ### Fixed
