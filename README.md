@@ -14,8 +14,8 @@ writes to disk.
 
 | Download | Platform |
 |---|---|
-| `Peep-x86_64.AppImage` | Linux x86-64 |
-| `Peep.exe` | Windows x64 |
+| `Peep-0.2.1-x86_64.AppImage` | Linux x86-64 |
+| `Peep-0.2.1.exe` | Windows x64 |
 
 ## Use
 
