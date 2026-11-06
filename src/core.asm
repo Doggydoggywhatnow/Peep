@@ -19,6 +19,7 @@ extern plat_audio_open      ; (rate) -> eax 0 = ok
 extern plat_audio_write     ; (stereo_s16_buf, frames)
 extern plat_audio_flush     ; ()
 extern plat_audio_close     ; (drain)
+extern plat_audio_queued    ; () -> rax frames written but not yet heard
 extern plat_map             ; (path, &len) -> rax ptr | 0
 extern plat_unmap           ; (ptr, len)
 extern plat_sleep           ; (ms)
@@ -53,6 +54,9 @@ g_blank       dd 0          ; Shift+Tab: nothing at all, just black
 g_volstep     dd 20         ; 0..20
 cmd_skip      dd 0          ; tracks to move (+/-), accumulated
 cmd_seek      dd 0          ; seconds to seek (+/-), accumulated
+cmd_refill    dd 0          ; volume changed: re-render the queued audio
+prep_info     dq 0          ; parsed info waiting for its cover (publish_end)
+pub_frames    dq 0          ; frames written since the track opened
 
 ; gain = 256 * (step/20)^2  — roughly perceptual
 voltab: dw 0,1,3,6,10,16,23,31,41,52,64,77,92,108,125,144,164,185,207,231,256
@@ -362,7 +366,7 @@ FUNC open_track, 16
     cmp  eax, 768000
     ja   .close
     mov  A1, rbx
-    call publish_info                 ; playable: title / artist / art -> UI
+    call publish_begin                ; tags now; cover once the audio runs
     mov  eax, [g_dec + DEC_RATE]
     cmp  eax, [dev_rate]
     je   .devok
@@ -388,6 +392,7 @@ FUNC open_track, 16
     mov  eax, 1
     RET_
 .close:
+    call publish_end
     call dec_close
 .unmap:
     mov  A1, [map_ptr]
@@ -463,6 +468,7 @@ FUNC play_track, 0
     call dec_seek
     mov  qword [st_pos], 0
     call plat_audio_flush
+    call plat_wake                    ; show the new time now
     jmp  .loop
 .doskip:
     mov  eax, [cur_idx]
@@ -499,9 +505,34 @@ FUNC play_track, 0
     call dec_seek
     mov  [st_pos], rbx
     call plat_audio_flush
+    call plat_wake                    ; show the new time now, not on the next tick
 .noseek:
+    ; --- volume -----------------------------------------------------------
+    ; The device still holds up to ~100-200 ms mixed at the old volume. Drop
+    ; it and decode again from the point actually being heard, so a volume
+    ; key takes effect at once.
+    xor  eax, eax
+    xchg eax, [cmd_refill]
+    test eax, eax
+    jz   .novol
+    cmp  dword [g_paused], 0
+    jne  .novol
+    call plat_audio_queued
+    test rax, rax
+    jle  .novol
+    mov  rbx, [st_pos]
+    sub  rbx, rax
+    jns  .v1
+    xor  ebx, ebx
+.v1:
+    call plat_audio_flush
+    mov  A1, rbx
+    call dec_seek
+    mov  [st_pos], rbx
+.novol:
     cmp  dword [g_paused], 0
     je   .play
+    call publish_end                  ; paused early: show the info anyway
     mov  A1, 15
     call plat_sleep
     jmp  .loop
@@ -518,13 +549,21 @@ FUNC play_track, 0
     mov  A2, rbx
     call plat_audio_write
     add  [st_pos], rbx
+    cmp  qword [prep_info], 0
+    je   .loop
+    add  [pub_frames], rbx
+    cmp  qword [pub_frames], PUBLISH_AFTER
+    jb   .loop
+    call publish_end                  ; audio is running: now the cover
     jmp  .loop
 .ended:
     inc  dword [cur_idx]
+    call publish_end                  ; a very short track
     RET_
 .flushout:
     call plat_audio_flush
 .out:
+    call publish_end
     RET_
 
 ;  ---------------------------------------------------------------------------
@@ -613,8 +652,12 @@ FUNC decode_art, 16
 .r: RET_
 %endif
 
-; publish_info(path): parse tags of the mapped file, hand the result to the UI
-FUNC publish_info, 0
+; publish_begin(path): parse the tags of the mapped file. Decoding the cover
+; (10-50 ms for a big JPEG or PNG) waits for publish_end, which play_track
+; calls once ~190 ms of audio is queued, so a new track starts playing
+; without waiting for its picture.
+PUBLISH_AFTER equ 8192                ; frames
+FUNC publish_begin, 0
     ARGS r12                          ; path
     mov  A1, INFO_SIZE
     call malloc
@@ -635,6 +678,16 @@ FUNC publish_info, 0
     mov  A3, 256
     call plat_title
 .titled:
+    mov  [prep_info], rbx
+    mov  qword [pub_frames], 0
+.r: RET_
+
+; publish_end(): decode the cover of the prepared info and hand it to the UI
+FUNC publish_end, 0
+    xor  ebx, ebx
+    xchg rbx, [prep_info]
+    test rbx, rbx
+    jz   .r
 %ifndef PURE
     mov  r13, [meta_art_len]
     test r13, r13
@@ -759,12 +812,14 @@ FUNC core_key, 0
     cmp  dword [g_volstep], 20
     jae  .yes
     inc  dword [g_volstep]
+    mov  dword [cmd_refill], 1
     jmp  .yes
 .k5:cmp  eax, K_VOLDN
     jne  .k6
     cmp  dword [g_volstep], 0
     je   .yes
     dec  dword [g_volstep]
+    mov  dword [cmd_refill], 1
     jmp  .yes
 .k6:cmp  eax, K_NEXT
     jne  .k7

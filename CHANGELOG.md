@@ -2,6 +2,27 @@
 
 All notable changes to Peep.
 
+## 0.2.5
+
+### Faster
+- Arrow keys respond at once:
+  - Seeking back in an MP3 no longer decodes the file again from the start.
+    The worst case measured on a 5-minute track went from 187 ms to under
+    1 ms. Peep builds a seek index the first time you seek in a track, which
+    takes about 2 ms for a typical song.
+  - The time display updates as soon as a seek happens, instead of on the
+    next clock tick (up to a quarter second later).
+  - Volume changes are heard immediately. Peep re-mixes the audio already
+    queued for the sound device (~100-190 ms) at the new volume.
+- New tracks start sooner: the cover picture is decoded once the audio is
+  already playing, so a large cover (10-50 ms to decode) no longer delays
+  the music.
+- Drawing the info and controls takes about half the work per frame:
+  - Text in a custom font is rasterized once and then reused, instead of on
+    every frame.
+  - The fade-out blends only the part of the window the controls cover.
+  - The shading behind the controls handles four pixels per step.
+
 ## 0.2.4
 
 ### Changed

@@ -105,10 +105,61 @@ size_t codec_read(dec_t *d, short *out, size_t frames)
     return 0;
 }
 
+/* MP3 seek index, one point per second, built in a single pass over the
+ * frame headers the first time the track is seeked. Without it every
+ * backward seek decodes the file again from the start (~200 ms into a
+ * 5-minute track, seconds into an hour-long one). Building it lazily keeps
+ * opening a track free; dr_mp3's own builder also makes a second counting
+ * pass and decodes back to the old position, which this skips. */
+static drmp3_uint64 mp3_index(drmp3 *m)  /* -> PCM frames in the stream */
+{
+    drmp3__seeking_mp3_frame_info fi[DRMP3_SEEK_LEADING_MP3_FRAMES + 1];
+    drmp3_uint32 nfi = 0, n = 0, cap = 0;
+    drmp3_uint64 pcm = 0, mp3n = 0, step = m->sampleRate ? m->sampleRate : 44100;
+    drmp3_uint64 next = step;
+    float frac = 0;
+    drmp3_seek_point *sp = NULL;
+
+    if (!drmp3_seek_to_start_of_stream(m)) return 0;
+    for (;;) {
+        drmp3_uint32 got;
+        if (nfi == DRMP3_COUNTOF(fi)) {
+            memmove(fi, fi + 1, sizeof fi - sizeof fi[0]);
+            nfi--;
+        }
+        fi[nfi].bytePos       = m->streamCursor - m->dataSize;
+        fi[nfi].pcmFrameIndex = pcm;
+        fi[nfi].mp3FrameIndex = mp3n;
+        got = drmp3_decode_next_frame_ex(m, NULL, NULL, NULL);   /* headers only */
+        if (got == 0) break;
+        nfi++;
+        mp3n += 1 + m->mp3FramesSkipped;
+        drmp3__accumulate_running_pcm_frame_count(m, got, &pcm, &frac);
+        while (next < pcm) {               /* `next` lies in the newest frame */
+            if (n == cap) {
+                drmp3_seek_point *g = realloc(sp, (cap = cap ? cap * 2 : 512) * sizeof *sp);
+                if (!g) { free(sp); sp = NULL; n = cap = 0; next = ~(drmp3_uint64)0; continue; }
+                sp = g;
+            }
+            sp[n].seekPosInBytes     = fi[0].bytePos;
+            sp[n].pcmFrameIndex      = next;
+            sp[n].mp3FramesToDiscard = (drmp3_uint16)(fi[nfi-1].mp3FrameIndex - fi[0].mp3FrameIndex);
+            sp[n].pcmFramesToDiscard = (drmp3_uint16)(next - fi[nfi-1].pcmFrameIndex);
+            n++;
+            next += step;
+        }
+    }
+    if (!(n && drmp3_bind_seek_table(m, n, sp))) free(sp);
+    return pcm;
+}
+
 void codec_seek(dec_t *d, unsigned long long frame)
 {
     switch (d->type) {
-    case T_MP3:  drmp3_seek_to_pcm_frame(d->h, frame); break;
+    case T_MP3:
+        if (!((drmp3 *)d->h)->pSeekPoints) mp3_index(d->h);
+        drmp3_seek_to_pcm_frame(d->h, frame);
+        break;
     case T_FLAC: drflac_seek_to_pcm_frame(d->h, frame); break;
     case T_WAV:  drwav_seek_to_pcm_frame(d->h, frame); break;
     case T_OGG:  stb_vorbis_seek(d->h, (unsigned)frame); break;
@@ -118,7 +169,8 @@ void codec_seek(dec_t *d, unsigned long long frame)
 void codec_close(dec_t *d)
 {
     switch (d->type) {
-    case T_MP3:  drmp3_uninit(d->h); free(d->h); break;
+    case T_MP3:  { void *sp = ((drmp3 *)d->h)->pSeekPoints;
+                   drmp3_uninit(d->h); free(sp); free(d->h); break; }
     case T_FLAC: drflac_close(d->h); break;
     case T_WAV:  drwav_uninit(d->h); free(d->h); break;
     case T_OGG:  stb_vorbis_close(d->h); break;

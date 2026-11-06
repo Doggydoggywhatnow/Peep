@@ -24,13 +24,14 @@ extern XDisplayHeight, XSetWindowBackgroundPixmap
 extern XUngrabPointer
 extern XSyncQueryExtension, XSyncInitialize, XSyncCreateCounter, XSyncSetCounter
 extern snd_pcm_open, snd_pcm_set_params, snd_pcm_writei, snd_pcm_recover
-extern snd_pcm_drop, snd_pcm_prepare, snd_pcm_drain, snd_pcm_close
+extern snd_pcm_drop, snd_pcm_prepare, snd_pcm_drain, snd_pcm_close, snd_pcm_delay
 extern malloc, free, open, close, lseek, mmap, munmap, opendir, readdir
 extern closedir, strlen, strcasecmp, usleep, pthread_create, poll, write, _exit
 extern pipe2, read, getenv, clock_gettime
 
 global main
 global plat_audio_open, plat_audio_write, plat_audio_flush, plat_audio_close
+global plat_audio_queued
 global plat_map, plat_unmap, plat_sleep, plat_title, plat_cmp
 global plat_wake, plat_ms, plat_font_scan, plat_font_dir
 
@@ -1416,6 +1417,23 @@ FUNC plat_audio_flush, 0
     mov  A1, [pcm]
     call snd_pcm_prepare
 .r: RET_
+
+; plat_audio_queued() -> rax frames written but not yet heard (0 if unknown)
+FUNC plat_audio_queued, 16
+    xor  ebx, ebx
+    mov  A1, [pcm]
+    test A1, A1
+    jz   .r
+    lea  A2, [L(0)]
+    call snd_pcm_delay
+    test eax, eax
+    jnz  .r
+    mov  rbx, [L(0)]
+    test rbx, rbx
+    jns  .r
+    xor  ebx, ebx
+.r: mov  rax, rbx
+    RET_
 
 FUNC plat_audio_close, 0               ; (drain)
     ARGS rbx

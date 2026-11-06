@@ -26,13 +26,14 @@ extern CreateFileW, GetFileSizeEx, CreateFileMappingW, MapViewOfFile
 extern UnmapViewOfFile, CloseHandle, CreateThread, Sleep, CreateEventW
 extern WaitForSingleObject, ExitProcess
 extern waveOutOpen, waveOutPrepareHeader, waveOutUnprepareHeader, waveOutWrite
-extern waveOutReset, waveOutClose
+extern waveOutReset, waveOutClose, waveOutGetPosition
 extern PostMessageW, GetKeyState, GetTickCount64, WideCharToMultiByte
 extern SystemParametersInfoW, GetEnvironmentVariableW, GetModuleFileNameW
 extern malloc, free, memcpy, wcslen, _wcsicmp
 
 global main
 global plat_audio_open, plat_audio_write, plat_audio_flush, plat_audio_close
+global plat_audio_queued
 global plat_map, plat_unmap, plat_sleep, plat_title, plat_cmp
 global plat_wake, plat_ms, plat_font_scan, plat_font_dir
 
@@ -87,6 +88,8 @@ mon_info    resb 40           ; MONITORINFO
 hwo         resq 1
 wev         resq 1
 next_buf    resd 1
+w_frames    resd 1                 ; frames written since open / last reset
+mmt         resb 12                ; MMTIME
 alignb 16
 hdrs        resb WAVEHDR_SZ * NBUF
 wbufs       resb CHUNK * 4 * NBUF
@@ -1184,6 +1187,7 @@ FUNC plat_audio_open, 32               ; (rate) -> 0 ok
     mov  ecx, WAVEHDR_SZ * NBUF / 8
     rep  stosq
     mov  dword [next_buf], 0
+    mov  dword [w_frames], 0
     xor  eax, eax
     RET_
 .fail:
@@ -1242,6 +1246,7 @@ FUNC plat_audio_write, 0               ; (buf, frames)
     mov  A3, WAVEHDR_SZ
     call waveOutWrite
     mov  qword [rbx + 16], 1
+    add  [w_frames], r13d
     mov  eax, [next_buf]
     inc  eax
     and  eax, NBUF - 1
@@ -1267,8 +1272,30 @@ FUNC plat_audio_flush, 0
     je   .r
     mov  A1, [hwo]
     call waveOutReset                  ; marks every queued buffer done
-    call release_all
+    call release_all                   ; ... and the play position restarts at 0
+    mov  dword [w_frames], 0
 .r: RET_
+
+; plat_audio_queued() -> rax frames written but not yet heard (0 if unknown)
+FUNC plat_audio_queued, 0
+    xor  ebx, ebx
+    cmp  qword [hwo], 0
+    je   .r
+    mov  dword [mmt], 2                ; TIME_SAMPLES
+    mov  A1, [hwo]
+    lea  A2, [mmt]
+    mov  A3, 12
+    call waveOutGetPosition
+    test eax, eax
+    jnz  .r
+    cmp  dword [mmt], 2                ; the driver may answer in other units
+    jne  .r
+    mov  eax, [w_frames]
+    sub  eax, [mmt + 4]
+    jle  .r
+    mov  ebx, eax
+.r: mov  rax, rbx
+    RET_
 
 FUNC plat_audio_close, 0               ; (drain)
     ARGS rbx

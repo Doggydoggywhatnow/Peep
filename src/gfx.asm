@@ -89,6 +89,11 @@ btn_ok      resd 1
 hover       resd 1             ; the pointer is over the window
 ui_a        resd 1             ; overlay opacity this frame, 0..256
 leave_ms    resq 1             ; when the pointer left
+ov_top      resd 1             ; first row the overlay drew on (fade from here)
+GC_N        equ 512            ; glyph cache entries (direct mapped)
+GC_SZ       equ 32             ; cp, px, bitmap, w, h, xoff, yoff
+alignb 8
+gcache      resb GC_N * GC_SZ
 btn         resd 12            ; 3 x (x0, y0, x1, y1)
 tl_bytes    resq 1
 ; scaler parameters
@@ -153,6 +158,7 @@ FUNC darken_rect, 0
     mov  rax, IN5
     movd xmm1, eax
     pshuflw xmm1, xmm1, 0
+    punpcklqdq xmm1, xmm1              ; mul in all 8 words
     pxor xmm2, xmm2
     movsxd r12, A1d
     movsxd r13, A2d
@@ -184,6 +190,23 @@ FUNC darken_rect, 0
     lea  rdi, [rdi + r12*4]
     mov  rcx, r14
     sub  rcx, r12
+.p4:cmp  rcx, 4                        ; 4 pixels a step
+    jb   .p1
+    movdqu xmm0, [rdi]
+    movdqa xmm3, xmm0
+    punpcklbw xmm0, xmm2
+    punpckhbw xmm3, xmm2
+    pmullw xmm0, xmm1
+    pmullw xmm3, xmm1
+    psrlw xmm0, 8
+    psrlw xmm3, 8
+    packuswb xmm0, xmm3
+    movdqu [rdi], xmm0
+    add  rdi, 16
+    sub  rcx, 4
+    jmp  .p4
+.p1:test rcx, rcx
+    jz   .nx
 .px:movd xmm0, [rdi]
     punpcklbw xmm0, xmm2
     pmullw xmm0, xmm1
@@ -193,7 +216,7 @@ FUNC darken_rect, 0
     add  rdi, 4
     dec  rcx
     jnz  .px
-    inc  r13
+.nx:inc  r13
     jmp  .row
 .r: RET_
 
@@ -539,30 +562,28 @@ FUNC text_draw, 64
     call font_kern
     add  r12d, eax
 .tnk:
-    mov  A1, [font_h]
-    mov  A2d, [L(8)]
-    mov  A3d, r14d
-    lea  A4, [L(16)]                  ; w, h, xoff, yoff
-    call font_glyph
+    mov  A1d, [L(8)]
+    mov  A2d, r14d
+    call glyph_get                    ; rasterized once, then reused
     test rax, rax
     jz   .tadv
-    mov  [L(32)], rax
-    mov  A1, rax
-    mov  A2d, [L(16)]
-    mov  A3d, [L(20)]
+    mov  r10, rax                     ; not an argument register on either ABI
+    mov  A1, [r10 + 8]                ; coverage
+    test A1, A1
+    jz   .tadv                        ; blank glyph (space)
+    mov  A2d, [r10 + 16]              ; w
+    mov  A3d, [r10 + 20]              ; h
     mov  eax, r12d
     sar  eax, 6
-    add  eax, [L(24)]
+    add  eax, [r10 + 24]              ; xoff
     mov  A4d, eax
     mov  eax, r13d
-    add  eax, [L(28)]
+    add  eax, [r10 + 28]              ; yoff
     movsxd rax, eax
     SET5 rax
     mov  rax, [L(0)]
     SET6 rax
     call blit_alpha
-    mov  A1, [L(32)]
-    call font_glyph_free
 .tadv:
     mov  A1, [font_h]
     mov  A2d, [L(8)]
@@ -1098,6 +1119,7 @@ FUNC icon, 16
 ;           44 icon_cy, 48 band_top
 FUNC overlay, 64
     mov  dword [btn_ok], 0
+    mov  dword [ov_top], 0             ; until the layout says otherwise
     mov  eax, [rc_w]
     mov  ecx, [rc_h]
     cmp  eax, ecx
@@ -1203,8 +1225,9 @@ FUNC overlay, 64
     ; ---- gradient: fade to ~78% darkness over 3u
     mov  ebx, edx
     cmp  ebx, 0
-    jge  .g
+    jge  .g0
     xor  ebx, ebx
+.g0:mov  [ov_top], ebx                ; nothing is drawn above the gradient
 .g: cmp  ebx, [rc_h]
     jge  .gd
     mov  eax, ebx
@@ -1782,10 +1805,18 @@ FUNC ui_alpha, 0
 ; fade_overlay(): rc_buf = cache + (rc_buf - cache) * ui_a/256, the frame
 ; with controls blended back toward the bare cover. SSE2, 4 pixels a step.
 FUNC fade_overlay, 0
+    mov  eax, [ov_top]                 ; rows above it are the bare cover
+    cmp  eax, [rc_h]
+    jae  .r
+    imul eax, [rc_w]
+    shl  rax, 2
     mov  rdi, [rc_buf]
     mov  rsi, [cache_px]
-    mov  ecx, [rc_w]
-    imul ecx, [rc_h]
+    add  rdi, rax
+    add  rsi, rax
+    mov  ecx, [rc_h]
+    sub  ecx, [ov_top]
+    imul ecx, [rc_w]
     shl  rcx, 2                        ; bytes
     mov  eax, [ui_a]
     shr  eax, 1                        ; 0..128: products fit in a signed word
@@ -1870,8 +1901,62 @@ FUNC core_next_wake, 0
 ; ============================================================================
 ; fonts
 ; ============================================================================
+%ifndef PURE
+; glyph_get(cp, px) -> rax cache entry {cp, px, bitmap, w, h, xoff, yoff},
+; 0 on failure. Rasterizing a glyph (stb_truetype) costs far more than
+; drawing it, and the overlay redraws the same text many times a second.
+FUNC glyph_get, 0
+    ARGS r12, r13
+    mov  eax, r12d
+    imul eax, 31
+    add  eax, r13d
+    and  eax, GC_N - 1
+    shl  eax, 5                        ; * GC_SZ
+    lea  rbx, [gcache]
+    add  rbx, rax
+    cmp  [rbx], r12d
+    jne  .miss
+    cmp  [rbx + 4], r13d
+    je   .hit
+.miss:
+    mov  A1, [rbx + 8]                 ; evict
+    test A1, A1
+    jz   .e
+    call font_glyph_free
+.e: mov  qword [rbx + 8], 0
+    mov  dword [rbx], 0
+    mov  A1, [font_h]
+    mov  A2d, r12d
+    mov  A3d, r13d
+    lea  A4, [rbx + 16]                ; w, h, xoff, yoff
+    call font_glyph
+    mov  [rbx + 8], rax                ; may be 0: a glyph with no pixels
+    mov  [rbx], r12d
+    mov  [rbx + 4], r13d
+.hit:
+    mov  rax, rbx
+    RET_
+
+; glyph_flush(): forget every cached glyph (the font changed)
+FUNC glyph_flush, 0
+    lea  rbx, [gcache]
+    lea  r12, [rbx + GC_N * GC_SZ]
+.l: cmp  rbx, r12
+    jae  .r
+    mov  A1, [rbx + 8]
+    test A1, A1
+    jz   .n
+    call font_glyph_free
+.n: mov  qword [rbx + 8], 0
+    mov  dword [rbx], 0
+    add  rbx, GC_SZ
+    jmp  .l
+.r: RET_
+%endif
+
 FUNC unload_font, 0
 %ifndef PURE
+    call glyph_flush
     mov  A1, [font_h]
     test A1, A1
     jz   .m
