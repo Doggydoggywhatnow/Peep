@@ -8,7 +8,7 @@ takes the cover's shape, and you can drag it to any size. Press **Tab** to
 show the track info and controls. Press **Shift+Tab** for nothing at all,
 only black, while the music keeps playing.
 
-Peep is hand-written x86-64 assembly. It runs entirely on your own machine.
+Peep is machine-written x86-64 assembly. It runs entirely on your own machine.
 It has no network code, no telemetry and no library database, and it never
 writes to disk.
 
