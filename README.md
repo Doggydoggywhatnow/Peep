@@ -1,4 +1,4 @@
-# Peep 0.4.4
+# Peep 0.4.5
 
 A music player that is just a screen.
 
@@ -15,10 +15,10 @@ writes to disk.
 
 | Download | Platform |
 |---|---|
-| [`Peep-0.4.4-x86_64.AppImage`](releases/Peep-0.4.4-x86_64.AppImage) | Linux x86-64 |
-| [`peep_0.4.4_amd64.deb`](releases/peep_0.4.4_amd64.deb) | Ubuntu 22.04+ / Debian 12+ (x86-64) |
-| [`Peep-0.4.4.exe`](releases/Peep-0.4.4.exe) | Windows x64 |
-| [`Peep-0.4.4-x86_64-musl`](releases/Peep-0.4.4-x86_64-musl) | Linux x86-64 with musl libc (Void musl, Alpine): one file, `chmod +x` and run |
+| [`Peep-0.4.5-x86_64.AppImage`](releases/Peep-0.4.5-x86_64.AppImage) | Linux x86-64 |
+| [`peep_0.4.5_amd64.deb`](releases/peep_0.4.5_amd64.deb) | Ubuntu 22.04+ / Debian 12+ (x86-64) |
+| [`Peep-0.4.5.exe`](releases/Peep-0.4.5.exe) | Windows x64 |
+| [`Peep-0.4.5-x86_64-musl`](releases/Peep-0.4.5-x86_64-musl) | Linux x86-64 with musl libc (Void musl, Alpine): one file, `chmod +x` and run |
 
 ## Philosophy
 

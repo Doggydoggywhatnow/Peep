@@ -22,7 +22,7 @@ missing); the exit code is 1 if anything fails.
 | `pause_silence` | the sound stops within ~one audio chunk of pausing (under 40 ms; it used to take 110 ms), and the audio heard across pause and resume is identical to the file: no gap, nothing repeated |
 | `pause_seek_resume` | seeking while paused, then resuming, plays from exactly 10 s later |
 | `clock_cadence` | with the controls shown Peep redraws once a second, never for nothing, and not at all while paused; a font notice still expires |
-| `volume_hold` | holding a volume key (key repeat) drops the audio queue at most for the first press and never stalls, and the gain glides instead of stepping |
+| `volume_hold` | holding a volume key (key repeat) never drops the audio queue or stalls the sound, and the gain glides instead of stepping |
 | `track_keys` | Next/Previous react in under 80 ms, land on the right track, quick presses settle fast, and Next on the last track is a no-op that doesn't interrupt the music |
 | `fullscreen_pointer` | fullscreen keeps the pointer usable; after 2 s of stillness the controls fade (0.5 s) and the pointer hides with them, and both return at once on movement; entering and leaving draw 1-3 frames, all at the right size |
 | `version_notice` | V shows "Peep X.Y.Z" for 2 s, costs two frames, and matches the README |

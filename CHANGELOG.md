@@ -2,6 +2,18 @@
 
 All notable changes to Peep.
 
+## 0.4.5
+
+### Fixed
+- **Volume keys never interrupt the sound.** A lone volume press, and the first
+  repeat of a held key, used to stop the sound device, throw away the queued
+  audio and start it again so the change was heard at once. On a real sound
+  system that restart can leave a small gap, which showed as stuttering when
+  you pressed or held the volume keys. Volume keys now only change the level,
+  which glides smoothly into the next piece of audio. The change is heard after
+  the audio already queued (up to about 0.1 s, plus your device's own delay)
+  instead of nearly at once.
+
 ## 0.4.4
 
 ### Fixed

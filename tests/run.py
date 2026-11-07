@@ -497,7 +497,7 @@ def clock_cadence():
 
 @check
 def volume_hold():
-    """Holding a volume key down (key repeat) must not make the sound stutter."""
+    """Volume keys never interrupt the sound: no queue drops, no stall, and the gain glides."""
     with peep([ramp_wav()]):
         drive("volhold")
     prog, marks, drops = read_prog()
@@ -511,8 +511,8 @@ def volume_hold():
             run += tb - ta
         else:
             worst, run = max(worst, run), 0
-    assert 1 <= len(held) <= 2, \
-        "the audio queue was dropped %d times (a lone press should, a held key should not)" % len(held)
+    assert len(held) == 0, \
+        "the audio queue was dropped %d times (a volume key must never interrupt the sound)" % len(held)
     assert worst < 8, "the sound stalled for %.0f ms" % worst
     # Smoothness: the file's left channel is known in every frame, so the gain actually applied can
     # be estimated (least squares over 64 frames). It must glide; a step would show as a jump.
@@ -535,10 +535,12 @@ def volume_hold():
     pairs = [(abs(x - y), n) for n, (x, y) in enumerate(zip(gains, gains[1:])) if x is not None and y is not None]
     step, at_win = max(pairs)
     assert min(real) < 5 and max(real) > 250, "the volume did not sweep the whole range"
-    assert step < 3, "the gain jumped by %.1f/256 within 64 frames (it should glide): window %d of %d, gains around it %s" % (
+    # One key press is a step of up to 24/256 (voltab), which the mixer glides over a 1024-frame chunk: 1.5 per
+    # 64 frames, 3 when two presses land in one chunk (key repeat is every 33 ms, a chunk is 23 ms), plus a
+    # little estimation noise. A real, unglided step would be 24 at once.
+    assert step < 6, "the gain jumped by %.1f/256 within 64 frames (it should glide): window %d of %d, gains around it %s" % (
         step, at_win, len(gains), [None if g is None else round(g, 1) for g in gains[max(0, at_win - 3): at_win + 5]])
-    return "%d queue drops in 3 s of key repeat, no stall, gain moves <= %.1f/256 per 64 frames" % (
-        len(held), step)
+    return "no queue drops in 3 s of key repeat, no stall, gain moves <= %.1f/256 per 64 frames" % step
 
 
 @check
