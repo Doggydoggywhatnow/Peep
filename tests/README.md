@@ -22,6 +22,8 @@ missing); the exit code is 1 if anything fails.
 | `pause_silence` | the sound stops within ~one audio chunk of pausing (under 40 ms; it used to take 110 ms), and the audio heard across pause and resume is identical to the file: no gap, nothing repeated |
 | `seek_audio_integrity` | seeking never garbles the audio: between seeks every sample heard is exactly the file's next one (no wrong, repeated, skipped or silent samples), through slow, rapid, paused and held-key seeking and the clamp at the start; the sound drops out for under 25 ms after each seek |
 | `seek_efficiency` | what an arrow key costs: a lone press reaches the audio within 8 ms and is heard within 12 ms (it was 22 ms before the player stopped waiting inside the audio write), with exactly one audio seek per press; six quick presses cause at most six |
+| `key_efficiency` | every key once (pause, resume, seek both ways, volume both ways, next, previous, controls on/off, blank on/off, font, version, quit): time until the screen changes, frames drawn, time until the audio reacts and is heard. Fails if any key takes over 50 ms to change the screen. Every number is written to `build/tests/efficiency/keys.json` and `keys.txt` |
+| `render_efficiency` | drawing: frames and CPU per frame (from `/proc/<pid>/schedstat`) with the controls hidden (must draw nothing), shown, fading in and out, in a 24-step resize drag (time until a frame with the new size) and entering/leaving fullscreen, with every frame time recorded in `build/tests/efficiency/render.json` and `render.txt` |
 | `arrow_seek` | the arrow keys move playback by exactly 10 s: right +10, left -10, three quick presses +30, left/left/right nets -10, and left with less than 10 s played stops at 0:00; measured on the audio actually played, not the clock |
 | `pause_seek_resume` | seeking while paused, then resuming, plays from exactly 10 s later |
 | `clock_cadence` | with the controls shown Peep redraws once a second, never for nothing, and not at all while paused; a font notice still expires |
@@ -45,6 +47,9 @@ missing); the exit code is 1 if anything fails.
 
 `python3 tests/run.py seeking` runs the whole seeking suite: `seek_latency`, `seek_settle`,
 `arrow_seek`, `seek_audio_integrity`, `seek_efficiency`, `pause_seek_resume` and `codec_seek`. (`--list` shows the groups.)
+
+`python3 tests/run.py efficiency` runs the three timing checks (`key_efficiency`, `render_efficiency`,
+`seek_efficiency`). The first two write their raw numbers under `build/tests/efficiency/`.
 
 ## Needs
 

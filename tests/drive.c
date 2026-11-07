@@ -13,6 +13,8 @@
  *   drive pause plain|seek     pause/resume (optionally seeking while paused)
  *   drive seekkeys             the arrow keys: +10 s, -10 s, quick presses, the start
 
+ *   drive keyeff <pid>         every key once, tagged, for measuring key-to-screen and key-to-audio times
+ *   drive rendereff            fade, resize, steady redraw and fullscreen, tagged, for measuring drawing
  *   drive seekcost             lone seek keys, then bursts, timestamped, to measure what each key costs
  *   drive seekaudio            many kinds of seeking, for checking the audio stays clean
  *   drive tick                 how often the screen is redrawn
@@ -147,9 +149,10 @@ static void need_window(void)
     wait_viewable(0);
 }
 
-static void key(KeySym ks)
+static void keymod(KeySym ks, unsigned state)
 {
     XEvent e = {0};
+    e.xkey.state = state;
     e.xkey.type = KeyPress;
     e.xkey.window = w;
     e.xkey.root = R;
@@ -158,6 +161,7 @@ static void key(KeySym ks)
     XSendEvent(d, w, 1, KeyPressMask, &e);
     XSync(d, 0);
 }
+static void key(KeySym ks) { keymod(ks, 0); }
 static void warp(int x, int y)
 {
     XWarpPointer(d, None, R, 0, 0, 0, 0, x, y);
@@ -574,6 +578,85 @@ static void cmd_version(void)
 }
 
 /* ---- quit -------------------------------------------------------------------- */
+/* ---- keyeff: every key once, tagged ------------------------------------------- */
+static void cmd_keyeff(int pid)
+{
+    static const struct { const char *name; KeySym ks; unsigned st; int gap; } seq[] = {
+        { "pause", XK_space, 0, 450 },   { "resume", XK_space, 0, 450 },
+        { "seek_fwd", XK_Right, 0, 450 }, { "seek_back", XK_Left, 0, 450 },
+        { "vol_down", XK_Down, 0, 450 },  { "vol_up", XK_Up, 0, 450 },
+        { "next", XK_n, 0, 600 },         { "prev", XK_p, 0, 600 },
+        { "ui_hide", XK_Tab, 0, 450 },    { "ui_show", XK_Tab, 0, 450 },
+        { "blank_on", XK_Tab, ShiftMask, 450 }, { "blank_off", XK_Tab, ShiftMask, 450 },
+        { "font", XK_g, 0, 450 },         { "version", XK_v, 0, 2300 },
+    };
+    need_window();
+    ms(1500);
+    key(XK_Tab);
+    inside();
+    ms(600);
+    for (unsigned i = 0; i < sizeof seq / sizeof *seq; i++) {
+        mark2(seq[i].name);
+        keymod(seq[i].ks, seq[i].st);
+        ms(seq[i].gap);
+    }
+    double t0 = now();
+    mark2("quit");
+    key(XK_q);
+    for (int i = 0; i < 4000; i++) {
+        char f[64], b[512];
+        snprintf(f, sizeof f, "/proc/%d/stat", pid);
+        FILE *s = fopen(f, "r");
+        if (!s) break;
+        char *p = fgets(b, sizeof b, s) ? strrchr(b, ')') : 0;
+        fclose(s);
+        if (!p || p[2] == 'Z') break;
+        usleep(500);
+    }
+    printf("quit_ms=%.1f\n", now() - t0);
+}
+
+/* ---- rendereff: the ways the picture changes, tagged ------------------------------ */
+static void cmd_rendereff(void)
+{
+    open_display();
+    XSelectInput(d, R, SubstructureRedirectMask);      /* we are the window manager */
+    outside();
+    find_window();
+    wait_viewable(1);
+    pump(1500);
+    int W, H;
+    win_size(&W, &H);
+    mark2("BEGIN_steady_hidden");  pump(2000);          /* controls hidden: nothing should redraw */
+    mark2("BEGIN_show_controls");
+    key(XK_Tab);
+    pump(300);
+    mark2("BEGIN_fade_in");        warp(W / 2, H / 2); pump(800);
+    mark2("BEGIN_steady_shown");   pump(3000);          /* controls shown: the clock, once a second */
+    mark2("BEGIN_fade_out");       outside(); pump(800);
+    warp(W / 2, H / 2);
+    pump(700);
+    mark2("BEGIN_resize");
+    for (int i = 0; i < 24; i++) {                      /* a drag: larger, then smaller, 30 ms apart */
+        int s = 300 + (i < 12 ? i : 24 - i) * 20;
+        char nm[48];
+        snprintf(nm, sizeof nm, "STEP_%d_%dx%d", i, s, s);
+        mark2(nm);
+        XResizeWindow(d, w, s, s);
+        XSync(d, 0);
+        pump(30);
+    }
+    pump(400);
+    mark2("END_resize");
+    win_size(&W, &H);
+    outside();
+    pump(700);
+    mark2("BEGIN_fullscreen_on");  key(XK_f); pump(1300);
+    mark2("BEGIN_fullscreen_off"); key(XK_f); pump(1300);
+    mark2("END");
+    key(XK_q);
+}
+
 static void cmd_quit(int pid, const char *mode)
 {
     need_window();
@@ -655,6 +738,8 @@ int main(int argc, char **argv)
     else if (!strcmp(c, "burst") && argc > 3) cmd_burst(argv[2], argv[3]);
     else if (!strcmp(c, "pause") && argc > 2) cmd_pause(argv[2]);
     else if (!strcmp(c, "seekkeys")) cmd_seekkeys();
+    else if (!strcmp(c, "keyeff") && argc > 2) cmd_keyeff(atoi(argv[2]));
+    else if (!strcmp(c, "rendereff")) cmd_rendereff();
     else if (!strcmp(c, "seekcost")) cmd_seekcost();
     else if (!strcmp(c, "seekaudio")) cmd_seekaudio();
     else if (!strcmp(c, "tick")) cmd_tick();

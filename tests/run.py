@@ -12,12 +12,14 @@ import argparse
 import array
 import glob
 import hashlib
+import json
 import os
 import random
 import re
 import shutil
 import signal
 import subprocess
+import threading
 import sys
 import time
 import wave
@@ -322,6 +324,16 @@ def read_sizes():
     return out
 
 
+def read_frames():
+    """Every frame Peep drew: (ms, checksum, "WxH")."""
+    out = []
+    for line in (LOGS / "lat.log").read_text().splitlines():
+        p = line.split()
+        if len(p) == 3 and p[0][0].isdigit():
+            out.append((float(p[0]), p[1], p[2]))
+    return out
+
+
 def read_prog():
     prog, marks, drops = [], {}, []
     for line in (LOGS / "prog.log").read_text().splitlines():
@@ -354,6 +366,7 @@ CHECKS = []
 
 # Named groups of checks: `python3 tests/run.py seeking` runs the whole group.
 GROUPS = {
+    "efficiency": ["key_efficiency", "render_efficiency", "seek_efficiency"],
     "seeking": ["seek_latency", "seek_settle", "arrow_seek", "seek_audio_integrity",
                 "seek_efficiency",
                 "pause_seek_resume", "codec_seek"],
@@ -575,6 +588,160 @@ def seek_efficiency():
     assert len(burst) <= 6, "six quick presses made %d audio seeks" % len(burst)
     return "key to audio %.0f ms, to sound %.0f ms (worst of 6); a burst of 6 made %d seek(s)" % (
         max(to_drop), max(to_sound), len(burst))
+
+
+REPORTS = BUILD / "efficiency"
+
+
+def pct(xs, q):
+    xs = sorted(xs)
+    return xs[min(len(xs) - 1, int(q * len(xs)))] if xs else None
+
+
+class CpuSampler:
+    """Samples a process's CPU time (ns, from /proc/<pid>/schedstat) every ~2 ms on the same clock as the logs."""
+    def __init__(self, pid):
+        self.pid, self.samples, self.stop = pid, [], False
+        self.t = threading.Thread(target=self.run, daemon=True)
+        self.t.start()
+
+    def run(self):
+        while not self.stop:
+            try:
+                ns = int(open("/proc/%d/schedstat" % self.pid).read().split()[0])
+            except (OSError, ValueError, IndexError):
+                break
+            self.samples.append((time.clock_gettime(time.CLOCK_MONOTONIC) * 1e3, ns))
+            time.sleep(0.002)
+
+    def at(self, t):
+        best = None
+        for tt, ns in self.samples:
+            if tt <= t:
+                best = ns
+            else:
+                break
+        return best
+
+    def used_ms(self, t0, t1):
+        a, b = self.at(t0), self.at(t1)
+        return None if a is None or b is None else (b - a) / 1e6
+
+    def close(self):
+        self.stop = True
+        self.t.join(1)
+
+
+def write_report(name, data, lines):
+    REPORTS.mkdir(parents=True, exist_ok=True)
+    (REPORTS / (name + ".json")).write_text(json.dumps(data, indent=1))
+    (REPORTS / (name + ".txt")).write_text("\n".join(lines) + "\n")
+
+
+KEY_ORDER = ["pause", "resume", "seek_fwd", "seek_back", "vol_down", "vol_up", "next", "prev",
+             "ui_hide", "ui_show", "blank_on", "blank_off", "font", "version"]
+
+
+@check
+def key_efficiency():
+    """Every key, once: how long until the screen changes, how many frames it costs, and how long until
+    the audio reacts. Every number is written to build/tests/efficiency/keys.json and keys.txt."""
+    need_pil()
+    with peep([album_dir()]) as p:
+        r = drive("keyeff", p.pid, timeout=60)
+    frames, _, m = read_lat()
+    prog, _, drops = read_prog()
+    keys = [k for k in KEY_ORDER if k in m]
+    assert len(keys) == len(KEY_ORDER), "only %d of %d keys were logged" % (len(keys), len(KEY_ORDER))
+    rows, lines = {}, ["%-10s %9s %7s %9s %10s" % ("key", "screen ms", "frames", "audio ms", "heard ms")]
+    nxt = {k: (m[KEY_ORDER[i + 1]] if i + 1 < len(KEY_ORDER) else m["quit"]) for i, k in enumerate(KEY_ORDER)}
+    for k in KEY_ORDER:
+        t0, t1 = m[k], nxt[k]
+        before = [h for t, h in frames if t < t0]
+        last = before[-1] if before else None
+        mine = [(t, h) for t, h in frames if t0 <= t < t1]
+        screen = next((t - t0 for t, h in mine if h != last), None)
+        in100 = sum(1 for t, h in mine if t - t0 < 100)
+        drop = next((d for d in drops if t0 <= d[0] < t1), None)
+        audio = drop[0] - t0 if drop else None
+        heard = None
+        if drop:
+            heard = next((t - t0 for t, pp in prog if drop[0] <= t < t1 and pp > drop[2]), None)
+        rows[k] = {"screen_ms": screen, "frames_in_100ms": in100, "frames_until_next_key": len(mine),
+                   "audio_ms": audio, "heard_ms": heard}
+        f = lambda v: "-" if v is None else "%.1f" % v
+        lines.append("%-10s %9s %7d %9s %10s" % (k, f(screen), in100, f(audio), f(heard)))
+    rows["quit"] = {"exit_ms": r["quit_ms"]}
+    lines.append("%-10s exits in %.1f ms" % ("quit", r["quit_ms"]))
+    write_report("keys", rows, lines)
+    slow = [k for k in KEY_ORDER if rows[k]["screen_ms"] is None or rows[k]["screen_ms"] > 50]
+    assert not slow, "no screen change within 50 ms after: %s (see %s)" % (", ".join(slow), REPORTS / "keys.txt")
+    worst = max(rows[k]["screen_ms"] for k in KEY_ORDER)
+    return "every key changes the screen in %.1f ms or less (slowest: %s); quit %.1f ms; details in %s" % (
+        worst, max(KEY_ORDER, key=lambda k: rows[k]["screen_ms"]), r["quit_ms"], REPORTS / "keys.json")
+
+
+@check
+def render_efficiency():
+    """Drawing: frames and CPU per frame while idle, fading, resizing and entering fullscreen, with every
+    frame time recorded to build/tests/efficiency/render.json and render.txt."""
+    need_pil()
+    with peep([album_dir()]) as p:
+        cpu = CpuSampler(p.pid)
+        try:
+            drive("rendereff", timeout=60)
+        finally:
+            cpu.close()
+    frames, _, m = read_lat()
+    ft = [(t, h, sz) for t, h, sz in read_frames()]
+    names = sorted((t, n[6:]) for n, t in m.items() if n.startswith("BEGIN_"))
+    ends = {n: t for n, t in m.items()}
+    out, lines = {}, ["%-14s %7s %8s %9s %11s %11s %11s" % (
+        "scenario", "frames", "cpu ms", "cpu/frame", "interval p50", "interval max", "first frame")]
+    for i, (t0, name) in enumerate(names):
+        t1 = names[i + 1][0] if i + 1 < len(names) else m["END"]
+        if name == "resize":
+            t1 = m["END_resize"]
+        fr = [(t, h, sz) for t, h, sz in ft if t0 <= t < t1]
+        iv = [b[0] - a[0] for a, b in zip(fr, fr[1:])]
+        used = cpu.used_ms(t0, t1)
+        d = {"duration_ms": t1 - t0, "frames": len(fr), "cpu_ms": used,
+             "cpu_ms_per_frame": (used / len(fr)) if used is not None and fr else None,
+             "first_frame_ms": (fr[0][0] - t0) if fr else None,
+             "interval_ms": {"min": min(iv) if iv else None, "p50": pct(iv, .5), "p95": pct(iv, .95),
+                             "max": max(iv) if iv else None},
+             "frame_times_ms": [round(t - t0, 2) for t, h, sz in fr],
+             "frame_sizes": sorted({sz for t, h, sz in fr})}
+        out[name] = d
+        f = lambda v: "-" if v is None else "%.2f" % v
+        lines.append("%-14s %7d %8s %9s %11s %11s %11s" % (
+            name, len(fr), f(used), f(d["cpu_ms_per_frame"]), f(d["interval_ms"]["p50"]),
+            f(d["interval_ms"]["max"]), f(d["first_frame_ms"])))
+    steps = []                              # each resize step: time until a frame shows the new size
+    for n, t in sorted(m.items(), key=lambda kv: kv[1]):
+        if n.startswith("STEP_"):
+            _, i, size = n.split("_")
+            fr = next(((tt - t, sz) for tt, h, sz in ft if tt >= t and sz == size), None)
+            any_fr = next(((tt - t, sz) for tt, h, sz in ft if tt >= t), None)
+            steps.append({"step": int(i), "size": size, "frame_with_that_size_ms": fr[0] if fr else None,
+                          "first_frame_ms": any_fr[0] if any_fr else None,
+                          "first_frame_size": any_fr[1] if any_fr else None})
+    out["resize_steps"] = steps
+    lat = [s["frame_with_that_size_ms"] for s in steps if s["frame_with_that_size_ms"] is not None]
+    lines.append("")
+    lines.append("resize steps: %d, new size on screen after p50 %s ms, max %s ms (%d of %d reached the exact size)" % (
+        len(steps), "-" if not lat else "%.1f" % pct(lat, .5), "-" if not lat else "%.1f" % max(lat), len(lat), len(steps)))
+    write_report("render", out, lines)
+    hid, shown = out["steady_hidden"], out["steady_shown"]
+    assert hid["frames"] == 0, "%d frames were drawn while the controls were hidden and nothing changed" % hid["frames"]
+    assert 2 <= shown["frames"] <= 6, "%d frames in 3 s of shown controls (expected about one a second)" % shown["frames"]
+    assert out["fade_in"]["frames"] >= 1 and out["fade_out"]["frames"] >= 10, "the fades drew too few frames"
+    cpf = [out[k]["cpu_ms_per_frame"] for k in ("fade_in", "fade_out", "resize", "fullscreen_on")
+           if out[k]["cpu_ms_per_frame"] is not None]
+    assert cpf and max(cpf) < 25, "a frame cost %.1f ms of CPU" % max(cpf)
+    assert lat and max(lat) < 60, "a resize step took %.0f ms to show" % max(lat)
+    return "idle %d frames, shown %d/3 s; CPU per frame up to %.2f ms; resize steps p50 %.1f ms, max %.1f ms; details in %s" % (
+        hid["frames"], shown["frames"], max(cpf), pct(lat, .5), max(lat), REPORTS / "render.json")
 
 
 @check
