@@ -31,7 +31,8 @@
 #include <time.h>
 #include <unistd.h>
 
-#define BUF 4410 /* frames: 100 ms */
+#define BUF 4410   /* frames: 100 ms */
+#define START 4408 /* start threshold: the buffer, in whole 1102-frame periods */
 
 static double now(void)
 {
@@ -98,13 +99,14 @@ snd_pcm_sframes_t snd_pcm_writei(snd_pcm_t *p, const void *b, snd_pcm_uframes_t 
     for (;;) {
         pthread_mutex_lock(&mu);
         if (queued() + n <= BUF) {
-            if (!ts0) ts0 = now();
             if (heard_fd >= 0 && pwrite(heard_fd, b, n * 4, heard_len * 4) < 0) { }
             heard_len += n;
             wr += n;
+            if (!ts0 && wr >= START) ts0 = now();   /* like ALSA: starts at the start threshold */
             pthread_mutex_unlock(&mu);
             return n;
         }
+        if (!ts0) ts0 = now();                      /* ...or when a write would block */
         pthread_mutex_unlock(&mu);
         usleep(1000);
     }
@@ -114,6 +116,14 @@ snd_pcm_sframes_t snd_pcm_avail_update(snd_pcm_t *p)
 {
     pthread_mutex_lock(&mu);
     long r = BUF - queued();
+    pthread_mutex_unlock(&mu);
+    return r;
+}
+
+snd_pcm_state_t snd_pcm_state(snd_pcm_t *p) /* a prepared stream is not playing until it starts */
+{
+    pthread_mutex_lock(&mu);
+    int r = ts0 ? 3 /* RUNNING */ : 2 /* PREPARED */;
     pthread_mutex_unlock(&mu);
     return r;
 }

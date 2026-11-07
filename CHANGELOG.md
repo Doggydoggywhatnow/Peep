@@ -2,6 +2,16 @@
 
 All notable changes to Peep.
 
+## 0.4.2
+
+### Fixed
+- **No sound in 0.4.1 on real sound systems.** 0.4.1 waited for room in the
+  sound device before writing, but a freshly opened ALSA device only starts
+  playing once the first write fills it, so it waited forever and stayed
+  silent. Peep now lets a device that is not yet playing start inside the
+  write, as before. The test sound device now starts the way ALSA does, so
+  this is caught by the tests. Sorry: 0.4.1 should not be used.
+
 ## 0.4.1
 
 ### Added
