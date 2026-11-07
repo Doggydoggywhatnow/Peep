@@ -116,3 +116,58 @@ sound card or window manager; see `tests/README.md`.
   Peep's window stays the wrong size.
 * Measure before optimizing and keep numbers in the CHANGELOG; the decoders
   were already negligible (about 0.05% of a core), so `-Os` stays.
+
+## Known limits (as of 0.2.12)
+
+Written by the agent that built the first version. Check these against the
+code before relying on them.
+
+**Never verified**
+* No build has run on a real Windows PC. Windows was exercised only under
+  Wine. The first real-hardware report may find bugs, especially in window
+  resizing (`WM_SIZING`) and `waveOut`.
+* Real sound hardware: audio was checked through a model ALSA device, not
+  speakers. PipeWire and PulseAudio are assumed to work through their ALSA
+  plugins.
+* Tiling window managers and native Wayland sessions.
+
+**By design or not yet built**
+* Linux is X11 (or XWayland) and ALSA's `default` device only. No native
+  Wayland, no JACK.
+* x86-64 only. No ARM builds and no macOS.
+* Audio: MP3, FLAC, Ogg **Vorbis** and WAV. No Opus, AAC/M4A or WMA.
+* Covers come only from the file's tags (JPEG, PNG, BMP, GIF). There is no
+  `folder.jpg` fallback and no WebP.
+* Playback is path order. No shuffle, repeat or saved queue. A drop replaces
+  the queue.
+* The built-in 8x8 font is ASCII only. Non-Latin text needs a TrueType font
+  from the fonts folder.
+* Nothing is remembered between launches (font, volume, window size). That
+  follows from the "never writes to disk" rule; do not add a settings file
+  without the owner's approval.
+* The `.exe` is unsigned, so SmartScreen warns on first run.
+* Linux needs glibc 2.34+. `peep_fmod` in `codecs.c` exists to avoid the
+  glibc 2.38 `fmod` symbol; check `objdump -T build/peep` for new versioned
+  symbols after adding C code.
+* The session proxy that built the early releases refused tag pushes and
+  release creation, so the owner may need to create GitHub releases by hand.
+
+## Where to go from here
+
+These are ideas, not decisions. The owner drives what Peep becomes, so
+propose and ask before building. Your job is engineering and tradeoffs.
+
+1. **Get a real Windows test.** Ask the owner to run `Peep.exe` and report
+   on resizing, drag and drop, audio and font cycling. This is the largest
+   unknown.
+2. **Run the AppImage file itself** on a clean distro (only the extracted
+   payload was run early on) and on a PipeWire-only system.
+3. **Codec coverage**, if wanted: Opus and M4A/AAC are the usual gaps. Each
+   adds C to the shim and size to the binary, so weigh it against the
+   Philosophy section.
+4. **Wayland**: XWayland works today; a native backend is a large task.
+5. **Robustness**: fuzz `meta.asm` (tag parsers are hand-written assembly
+   reading untrusted files) and the cover decode path. Add the findings to
+   `tests/`.
+6. Keep `make test` green and add a check for every fix, as the existing
+   checks do.
