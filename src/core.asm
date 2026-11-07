@@ -33,7 +33,7 @@ extern plat_join            ; (handle)
 ; ---- C runtime ------------------------------------------------------------
 extern malloc, calloc, free, realloc, memcpy, qsort
 ; the decoder kernel (src/peep.asm, src/flac.asm; API in src/peep.h)
-extern peep_open, peep_fill, peep_seek, peep_close, peep_codec_flac, peep_codec_wavx
+extern peep_open, peep_fill, peep_seek, peep_close, peep_codec_flac, peep_codec_wavx, peep_codec_wavc
 %ifndef PURE
 extern codec_open, codec_read, codec_seek, codec_close   ; the C shim (src/codecs.c)
 %endif
@@ -79,11 +79,13 @@ job_hash      dq 0
 
 ; gain = 256 * (step/20)^2  — roughly perceptual
 voltab: dw 0,1,3,6,10,16,23,31,41,52,64,77,92,108,125,144,164,185,207,231,256
-; Codecs tried after the kernel's built-in 16-bit PCM WAV, in order: the other
-; WAV formats (8/12/20/24/32-bit PCM, 32/64-bit float), native FLAC, then
-; (unless PURE) the C shim for MP3 and Ogg Vorbis.
+; Codecs tried after the kernel's built-in 16-bit PCM WAV, in order: the compressed
+; WAV formats (A-law, mu-law, IMA and MS ADPCM), the other WAV formats
+; (8/12/20/24/32-bit PCM, 32/64-bit float), native FLAC, then (unless PURE) the
+; C shim for MP3 and Ogg Vorbis.
 align 8
-codec_list:   dq peep_codec_wavx
+codec_list:   dq peep_codec_wavc
+              dq peep_codec_wavx
               dq peep_codec_flac
 %ifndef PURE
               dq peep_codec_shim

@@ -40,6 +40,7 @@ missing); the exit code is 1 if anything fails.
 | `wavx_decoder` | the other WAV formats (8/12/16/20/24/32-bit PCM, 32/64-bit float, extensible headers, truncation) against an independent model (needs numpy) |
 | `flac_crc` | damaged FLAC frames are caught by their CRC-16, counted, and skipped without stopping playback (needs numpy) |
 | `hires_output` | full-resolution output, volume and the 16-bit conversion, bit-exact against a model. One group of cases (a 16-bit-only codec) needs `dr_flac`, which Peep no longer has, so it is skipped with `--no-legacy` (needs numpy) |
+| `wavc_decoder` | compressed WAV (A-law, mu-law, IMA and Microsoft ADPCM) against independent models checked against ffmpeg and libsndfile, plus the workspace protocol (needs numpy and ffmpeg) |
 | `flac_decoder` | the native FLAC decoder against ground truth: 120 random streams using every feature of the format, with seeks (needs numpy) |
 | `decoder_fuzz` | 100,000 mutated WAV/FLAC inputs with guard pages around every buffer: no out-of-bounds read or write (needs numpy) |
 | `stress_valgrind` | rapid skipping and fullscreen toggling cause no memory errors |

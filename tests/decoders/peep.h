@@ -88,6 +88,10 @@ extern const peep_codec peep_codec_flac;
  * 16-bit decoder does not take. Put it in the codecs list. No workspace needed. */
 extern const peep_codec peep_codec_wavx;
 const peep_codec *peep_wavx(void);
+/* Compressed WAV codec (wavc.asm): A-law, mu-law, IMA ADPCM and Microsoft ADPCM (see the file's header for what is covered). Output is 16-bit
+ * (p->bits = 16). ADPCM needs an 80-byte workspace (work_need protocol); A-law and mu-law need none. */
+extern const peep_codec peep_codec_wavc;
+const peep_codec *peep_wavc(void);
 /* The same table's address, as a function: for languages whose FFI can call functions but not read data symbols. */
 const peep_codec *peep_flac(void);
 

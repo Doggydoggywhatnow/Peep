@@ -75,10 +75,10 @@ def build():
          ["gcc", *cflags, "-shared", "-fPIC", str(TESTS / "shim.c"), "-o", str(SHIM),
           "-ldl", "-lpthread", "-lX11"]),
         (CODEC, [TESTS / "codec_seek.c", codecs, ROOT / "build" / "dec.o", ROOT / "build" / "flac.o",
-                 ROOT / "build" / "wav.o"],
+                 ROOT / "build" / "wav.o", ROOT / "build" / "wavc.o"],
          ["gcc", *cflags, str(TESTS / "codec_seek.c"), str(ROOT / "build" / "dec.o"),
-          str(ROOT / "build" / "flac.o"), str(ROOT / "build" / "wav.o"), str(codecs), "-o", str(CODEC),
-          "-lm"]),
+          str(ROOT / "build" / "flac.o"), str(ROOT / "build" / "wav.o"), str(ROOT / "build" / "wavc.o"),
+          str(codecs), "-o", str(CODEC), "-lm"]),
     ):
         if out.exists() and all(out.stat().st_mtime > i.stat().st_mtime for i in inputs):
             continue  # up to date
@@ -1139,7 +1139,8 @@ def decoder_tools():
         import numpy  # noqa: F401
     except ImportError:
         raise Skip("needs numpy (python3 -m pip install numpy)")
-    objs = [ROOT / "build" / "dec.o", ROOT / "build" / "flac.o", ROOT / "build" / "wav.o"]
+    objs = [ROOT / "build" / "dec.o", ROOT / "build" / "flac.o", ROOT / "build" / "wav.o",
+            ROOT / "build" / "wavc.o"]
     out = {}
     for name, src, extra in (("peepdump", "peepdump.c", ["-O2", "-DNO_DR"]), ("fuzz", "fuzz.c", ["-O1", "-g"])):
         exe, sp = BUILD / name, TESTS / "decoders" / src
@@ -1175,6 +1176,33 @@ def wav_decoder():
 def wavx_decoder():
     """The other WAV formats (8/12/16/20/24/32-bit PCM, 32/64-bit float) against an independent model."""
     return run_suite("testwavx.py", "--run", "240", "--seed", "1")
+
+
+@check
+def wavc_decoder():
+    """Compressed WAV (A-law, mu-law, IMA and Microsoft ADPCM) against independent models, and the workspace protocol."""
+    need("ffmpeg")
+    t = decoder_tools()
+    r = subprocess.run([sys.executable, str(TESTS / "decoders" / "testwavc.py"), "--tool", str(t["peepdump"]),
+                        "--seed", "1"], capture_output=True, text=True, timeout=600)
+    out = (r.stdout + r.stderr).strip()
+    assert r.returncode == 0 and " 0 failures" in r.stdout, out[-400:]
+    seeds = BUILD / "seeds"
+    seeds.mkdir(exist_ok=True)
+    subprocess.run([sys.executable, str(TESTS / "decoders" / "testwavc.py"), "--gen", str(seeds)],
+                   check=True, capture_output=True)
+    ws = BUILD / "testwavc_ws"
+    objs = [ROOT / "build" / n for n in ("dec.o", "flac.o", "wav.o", "wavc.o")]
+    sp = TESTS / "decoders" / "testwavc_ws.c"
+    if not ws.exists() or any(ws.stat().st_mtime <= p.stat().st_mtime for p in [sp, *objs]):
+        subprocess.run(["gcc", "-w", "-O2", "-I", str(TESTS / "decoders"), "-o", str(ws), str(sp),
+                        *map(str, objs)], check=True)
+    files = sorted(str(f) for f in seeds.glob("c?.wav"))
+    assert files, "testwavc.py --gen made no sample files"
+    w = subprocess.run([str(ws), *files], capture_output=True, text=True)
+    assert w.returncode == 0, (w.stdout + w.stderr).strip()[-300:]
+    done = [l for l in r.stdout.splitlines() if " 0 failures" in l]
+    return (done[-1] if done else r.stdout.strip().splitlines()[-1]).strip() + "; workspace protocol ok"
 
 
 @check
@@ -1216,6 +1244,10 @@ def decoder_fuzz():
         subprocess.run([sys.executable, str(TESTS / "decoders" / "testwavx.py"), "--gen", str(seeds)],
                        check=True, capture_output=True)
     files += [str(seeds / ("w%d.wav" % n)) for n in range(5)]
+    if not (seeds / "c0.wav").exists():
+        subprocess.run([sys.executable, str(TESTS / "decoders" / "testwavc.py"), "--gen", str(seeds)],
+                       capture_output=True)
+    files += sorted(str(f) for f in seeds.glob("c?.wav"))
     r = subprocess.run([str(t["fuzz"]), "100000", *files], capture_output=True, text=True, timeout=300)
     assert r.returncode == 0 and "no crash" in r.stdout + r.stderr, (r.stdout + r.stderr).strip()[-400:]
     return (r.stdout + r.stderr).strip().splitlines()[-1]
