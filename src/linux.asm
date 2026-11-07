@@ -26,13 +26,14 @@ extern XUngrabPointer
 extern XSyncQueryExtension, XSyncInitialize, XSyncCreateCounter, XSyncSetCounter
 extern snd_pcm_open, snd_pcm_set_params, snd_pcm_writei, snd_pcm_recover
 extern snd_pcm_drop, snd_pcm_prepare, snd_pcm_drain, snd_pcm_close, snd_pcm_delay
+extern snd_pcm_avail_update, snd_pcm_wait
 extern malloc, free, open, close, lseek, mmap, munmap, opendir, readdir
 extern closedir, strlen, strcasecmp, usleep, pthread_create, pthread_join, poll, write, _exit
 extern pipe2, read, getenv, clock_gettime
 
 global main
 global plat_audio_open, plat_audio_write, plat_audio_flush, plat_audio_close
-global plat_audio_queued
+global plat_audio_queued, plat_audio_wait
 global plat_map, plat_unmap, plat_sleep, plat_title, plat_cmp
 global plat_wake, plat_ms, plat_font_scan, plat_font_dir
 global plat_thread, plat_join
@@ -1534,6 +1535,25 @@ FUNC plat_audio_write, 0               ; (buf, frames)
 .ok:sub  r12, rax
     lea  rbx, [rbx + rax*4]
     jmp  .l
+.r: RET_
+
+; plat_audio_wait() -> eax 1 if the device has room for a chunk (or can't say),
+; else waits up to 2 ms for room and returns 0, so the caller can look for commands
+FUNC plat_audio_wait, 0
+    mov  A1, [pcm]
+    test A1, A1
+    jz   .yes
+    call snd_pcm_avail_update
+    test rax, rax
+    js   .yes                          ; xrun etc.: let the write recover
+    cmp  rax, CHUNK
+    jge  .yes
+    mov  A1, [pcm]
+    mov  A2d, 2
+    call snd_pcm_wait
+    xor  eax, eax
+    jmp  .r
+.yes: mov  eax, 1
 .r: RET_
 
 FUNC plat_audio_flush, 0

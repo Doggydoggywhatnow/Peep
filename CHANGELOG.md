@@ -2,6 +2,21 @@
 
 All notable changes to Peep.
 
+## 0.4.1
+
+### Fixed
+- **Seeking is exact.** The arrow keys moved from where the decoder was, which
+  runs about 0.1 s ahead of what you hear, so right skipped 10.1 s and left
+  went back only 9.9 s. They now move exactly 10 s from the point being heard
+  (measured on the audio itself).
+
+### Changed
+- **Keys are seen sooner.** The player only looked for keys between audio
+  writes, and a write waits for room in the sound device, so a key could wait
+  up to 23 ms. It now waits for room in 2 ms slices and looks for keys in
+  between. Seek key to new sound: 22 ms before, about 1 ms now. Skip, volume,
+  pause and quit go through the same loop and react as fast.
+
 ## 0.4.0
 
 ### Changed

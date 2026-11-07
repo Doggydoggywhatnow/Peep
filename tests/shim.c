@@ -110,6 +110,20 @@ snd_pcm_sframes_t snd_pcm_writei(snd_pcm_t *p, const void *b, snd_pcm_uframes_t 
     }
 }
 
+snd_pcm_sframes_t snd_pcm_avail_update(snd_pcm_t *p)
+{
+    pthread_mutex_lock(&mu);
+    long r = BUF - queued();
+    pthread_mutex_unlock(&mu);
+    return r;
+}
+
+int snd_pcm_wait(snd_pcm_t *p, int ms)
+{
+    usleep(1000);
+    return 1;
+}
+
 int snd_pcm_delay(snd_pcm_t *p, snd_pcm_sframes_t *d)
 {
     pthread_mutex_lock(&mu);

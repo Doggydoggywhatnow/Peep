@@ -1,4 +1,4 @@
-# Peep 0.4.0
+# Peep 0.4.1
 
 A music player that is just a screen.
 
@@ -15,9 +15,9 @@ writes to disk.
 
 | Download | Platform |
 |---|---|
-| [`Peep-0.4.0-x86_64.AppImage`](releases/Peep-0.4.0-x86_64.AppImage) | Linux x86-64 |
-| [`peep_0.4.0_amd64.deb`](releases/peep_0.4.0_amd64.deb) | Ubuntu 22.04+ / Debian 12+ (x86-64) |
-| [`Peep-0.4.0.exe`](releases/Peep-0.4.0.exe) | Windows x64 |
+| [`Peep-0.4.1-x86_64.AppImage`](releases/Peep-0.4.1-x86_64.AppImage) | Linux x86-64 |
+| [`peep_0.4.1_amd64.deb`](releases/peep_0.4.1_amd64.deb) | Ubuntu 22.04+ / Debian 12+ (x86-64) |
+| [`Peep-0.4.1.exe`](releases/Peep-0.4.1.exe) | Windows x64 |
 
 ## Philosophy
 

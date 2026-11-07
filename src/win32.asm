@@ -34,7 +34,7 @@ extern malloc, free, memcpy, wcslen, _wcsicmp
 
 global main
 global plat_audio_open, plat_audio_write, plat_audio_flush, plat_audio_close
-global plat_audio_queued
+global plat_audio_queued, plat_audio_wait
 global plat_map, plat_unmap, plat_sleep, plat_title, plat_cmp
 global plat_wake, plat_ms, plat_font_scan, plat_font_dir
 global plat_thread, plat_join
@@ -1334,6 +1334,28 @@ FUNC wait_hdr, 0
     mov  A3, WAVEHDR_SZ
     call waveOutUnprepareHeader
     mov  qword [rbx + 16], 0
+.r: RET_
+
+; plat_audio_wait() -> eax 1 if the next buffer is free (or no device), else waits
+; up to 2 ms for one and returns 0, so the caller can look for commands
+FUNC plat_audio_wait, 0
+    mov  eax, 1
+    cmp  qword [hwo], 0
+    je   .r
+    mov  eax, [next_buf]
+    imul eax, WAVEHDR_SZ
+    lea  rbx, [hdrs]
+    add  rbx, rax
+    cmp  qword [rbx + 16], 0
+    je   .y
+    test dword [rbx + 24], 1           ; WHDR_DONE
+    jnz  .y
+    mov  A1, [wev]
+    mov  A2, 2
+    call WaitForSingleObject
+    xor  eax, eax
+    jmp  .r
+.y: mov  eax, 1
 .r: RET_
 
 FUNC plat_audio_write, 0               ; (buf, frames)
