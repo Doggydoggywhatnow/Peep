@@ -355,6 +355,7 @@ CHECKS = []
 # Named groups of checks: `python3 tests/run.py seeking` runs the whole group.
 GROUPS = {
     "seeking": ["seek_latency", "seek_settle", "arrow_seek", "seek_audio_integrity",
+                "seek_efficiency",
                 "pause_seek_resume", "codec_seek"],
 }
 
@@ -545,6 +546,35 @@ def seek_audio_integrity():
     assert max(gaps) < 25, "the sound dropped out for %.0f ms after a seek" % max(gaps)
     return "%d seeks, %d stretches (%.1f s) every sample exactly the file's; longest dropout %.0f ms" % (
         len(drops), stretches, frames / SR, max(gaps))
+
+
+@check
+def seek_efficiency():
+    """What an arrow key costs: a lone press reaches the audio within 40 ms and is heard within 60 ms,
+    exactly one seek per press, and a burst of six quick presses is cheaper than six separate seeks."""
+    with peep([ramp_wav()]):
+        drive("seekcost", timeout=60)
+    prog, marks, drops = read_prog()
+    keys = [float(l.split()[1]) for l in (LOGS / "prog.log").read_text().splitlines()
+            if l.startswith("MARK") and l.split()[2] == "K"]
+    assert len(keys) == 6, "only %d key presses were logged" % len(keys)
+    t_burst, t_end = marks["BURST"], marks["END"]
+    to_drop, to_sound = [], []
+    for i, k in enumerate(keys):
+        stop = keys[i + 1] if i + 1 < len(keys) else t_burst
+        mine = [d for d in drops if k <= d[0] < stop]
+        assert len(mine) == 1, "press %d caused %d seeks of the audio queue, not 1" % (i + 1, len(mine))
+        t, _, after = mine[0]
+        heard = next((tt for tt, pp in prog if tt >= t and pp > after), None)
+        assert heard is not None, "press %d was never heard" % (i + 1)
+        to_drop.append(t - k)
+        to_sound.append(heard - k)
+    assert max(to_drop) < 40, "a seek key took %.0f ms to reach the audio" % max(to_drop)
+    assert max(to_sound) < 60, "a seek key took %.0f ms to be heard" % max(to_sound)
+    burst = [d for d in drops if t_burst <= d[0] < t_end]
+    assert len(burst) < 6, "six quick presses made %d separate audio seeks" % len(burst)
+    return "key to audio %.0f ms, to sound %.0f ms (worst of 6); a burst of 6 made %d seek(s)" % (
+        max(to_drop), max(to_sound), len(burst))
 
 
 @check

@@ -12,6 +12,8 @@
  *   drive burst SEQ OUT.ppm    key burst (R, L, . = pause), then a screenshot
  *   drive pause plain|seek     pause/resume (optionally seeking while paused)
  *   drive seekkeys             the arrow keys: +10 s, -10 s, quick presses, the start
+
+ *   drive seekcost             lone seek keys, then bursts, timestamped, to measure what each key costs
  *   drive seekaudio            many kinds of seeking, for checking the audio stays clean
  *   drive tick                 how often the screen is redrawn
  *   drive volhold              hold the volume keys down (key repeat)
@@ -417,6 +419,23 @@ static void cmd_seekkeys(void)
     key(XK_q);
 }
 
+/* ---- seekcost: what an arrow key costs, alone and in a burst ------------------- */
+static void cmd_seekcost(void)
+{
+    need_window();
+    ms(1500);
+    for (int i = 0; i < 6; i++) {                       /* lone presses, 500 ms apart */
+        mark("PROGLOG", "MARK", "K");
+        key(i % 2 ? XK_Left : XK_Right);
+        ms(500);
+    }
+    mark("PROGLOG", "MARK", "BURST");                   /* 3 right then 3 left, 2 ms apart: net zero */
+    for (int i = 0; i < 6; i++) { key(i < 3 ? XK_Right : XK_Left); ms(2); }
+    ms(700);
+    mark("PROGLOG", "MARK", "END");
+    key(XK_q);
+}
+
 /* ---- seekaudio: every kind of seeking, to check the audio itself stays clean ---- */
 static void cmd_seekaudio(void)
 {
@@ -636,6 +655,7 @@ int main(int argc, char **argv)
     else if (!strcmp(c, "burst") && argc > 3) cmd_burst(argv[2], argv[3]);
     else if (!strcmp(c, "pause") && argc > 2) cmd_pause(argv[2]);
     else if (!strcmp(c, "seekkeys")) cmd_seekkeys();
+    else if (!strcmp(c, "seekcost")) cmd_seekcost();
     else if (!strcmp(c, "seekaudio")) cmd_seekaudio();
     else if (!strcmp(c, "tick")) cmd_tick();
     else if (!strcmp(c, "version")) cmd_version();
