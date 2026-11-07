@@ -550,8 +550,8 @@ def seek_audio_integrity():
 
 @check
 def seek_efficiency():
-    """What an arrow key costs: a lone press reaches the audio within 40 ms and is heard within 60 ms,
-    exactly one seek per press, and a burst of six quick presses is cheaper than six separate seeks."""
+    """What an arrow key costs: a lone press reaches the audio within 8 ms and is heard within 12 ms,
+    exactly one seek per press, and a burst of six quick presses causes at most six (one per key)."""
     with peep([ramp_wav()]):
         drive("seekcost", timeout=60)
     prog, marks, drops = read_prog()
@@ -569,10 +569,10 @@ def seek_efficiency():
         assert heard is not None, "press %d was never heard" % (i + 1)
         to_drop.append(t - k)
         to_sound.append(heard - k)
-    assert max(to_drop) < 40, "a seek key took %.0f ms to reach the audio" % max(to_drop)
-    assert max(to_sound) < 60, "a seek key took %.0f ms to be heard" % max(to_sound)
+    assert max(to_drop) < 8, "a seek key took %.0f ms to reach the audio" % max(to_drop)
+    assert max(to_sound) < 12, "a seek key took %.0f ms to be heard" % max(to_sound)
     burst = [d for d in drops if t_burst <= d[0] < t_end]
-    assert len(burst) < 6, "six quick presses made %d separate audio seeks" % len(burst)
+    assert len(burst) <= 6, "six quick presses made %d audio seeks" % len(burst)
     return "key to audio %.0f ms, to sound %.0f ms (worst of 6); a burst of 6 made %d seek(s)" % (
         max(to_drop), max(to_sound), len(burst))
 

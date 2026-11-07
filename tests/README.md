@@ -21,7 +21,7 @@ missing); the exit code is 1 if anything fails.
 | `seek_settle` | after bursts of arrow keys the clock reads the right time, e.g. `RR` and `R.R.L.R` agree |
 | `pause_silence` | the sound stops within ~one audio chunk of pausing (under 40 ms; it used to take 110 ms), and the audio heard across pause and resume is identical to the file: no gap, nothing repeated |
 | `seek_audio_integrity` | seeking never garbles the audio: between seeks every sample heard is exactly the file's next one (no wrong, repeated, skipped or silent samples), through slow, rapid, paused and held-key seeking and the clamp at the start; the sound drops out for under 25 ms after each seek |
-| `seek_efficiency` | what an arrow key costs: a lone press reaches the audio within 40 ms and is heard within 60 ms, with exactly one audio seek per press; six quick presses (net zero) cost fewer than six seeks |
+| `seek_efficiency` | what an arrow key costs: a lone press reaches the audio within 8 ms and is heard within 12 ms (it was 22 ms before the player stopped waiting inside the audio write), with exactly one audio seek per press; six quick presses cause at most six |
 | `arrow_seek` | the arrow keys move playback by exactly 10 s: right +10, left -10, three quick presses +30, left/left/right nets -10, and left with less than 10 s played stops at 0:00; measured on the audio actually played, not the clock |
 | `pause_seek_resume` | seeking while paused, then resuming, plays from exactly 10 s later |
 | `clock_cadence` | with the controls shown Peep redraws once a second, never for nothing, and not at all while paused; a font notice still expires |

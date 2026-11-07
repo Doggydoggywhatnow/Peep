@@ -20,6 +20,7 @@ extern plat_audio_write     ; (stereo_s16_buf, frames)
 extern plat_audio_flush     ; ()
 extern plat_audio_close     ; (drain)
 extern plat_audio_queued    ; () -> rax frames written but not yet heard
+extern plat_audio_wait      ; () -> eax 1 = room for a chunk, 0 = not yet (waits a couple of ms)
 extern plat_map             ; (path, &len) -> rax ptr | 0
 extern plat_unmap           ; (ptr, len)
 extern plat_sleep           ; (ms)
@@ -632,6 +633,11 @@ FUNC play_track, 0
     jmp  .loop
 .play:
     mov  dword [pause_done], 0
+    ; Wait for room in the device here, not inside the write, so every command
+    ; (seek, skip, volume, pause, quit) is seen within ~2 ms, not after a chunk.
+    call plat_audio_wait
+    test eax, eax
+    jz   .loop
     lea  A1, [g_peep]
     lea  A2, [decbuf]
     mov  A3, CHUNK
