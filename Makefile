@@ -40,13 +40,19 @@ $(B)/gfx.o: src/gfx.asm $(CORE_DEPS) README.md | $(B)
 	$(NASM) -f elf64 $(VERFLAG) -Isrc/ $< -o $@
 $(B)/gfx_pure.o: src/gfx.asm $(CORE_DEPS) README.md | $(B)
 	$(NASM) -f elf64 -DPURE $(VERFLAG) -Isrc/ $< -o $@
+# The decoders: the playback kernel with the built-in 16-bit PCM WAV decoder
+# (src/peep.asm), and native FLAC (src/flac.asm). Pure assembly.
+$(B)/dec.o: src/peep.asm src/abi.inc | $(B)
+	$(NASM) -f elf64 -Isrc/ $< -o $@
+$(B)/flac.o: src/flac.asm src/abi.inc | $(B)
+	$(NASM) -f elf64 -Isrc/ $< -o $@
 $(B)/codecs.o: src/codecs.c | $(B)
 	$(CC) $(CODEC_CFLAGS) -c $< -o $@
 
 LINUX_LIBS := -lX11 -lXext -lasound -lm
-$(B)/peep: $(B)/core.o $(B)/meta.o $(B)/gfx.o $(B)/linux.o $(B)/codecs.o
+$(B)/peep: $(B)/core.o $(B)/meta.o $(B)/gfx.o $(B)/linux.o $(B)/dec.o $(B)/flac.o $(B)/codecs.o
 	$(CC) -no-pie -s -Wl,--as-needed -Wl,--gc-sections -o $@ $^ $(LINUX_LIBS)
-$(B)/peep-pure: $(B)/core_pure.o $(B)/meta.o $(B)/gfx_pure.o $(B)/linux.o
+$(B)/peep-pure: $(B)/core_pure.o $(B)/meta.o $(B)/gfx_pure.o $(B)/linux.o $(B)/dec.o $(B)/flac.o
 	$(CC) -no-pie -s -Wl,--as-needed -o $@ $^ -lX11 -lXext -lasound
 pure: $(B)/peep-pure
 
@@ -59,11 +65,15 @@ $(B)/meta.obj: src/meta.asm src/abi.inc | $(B)
 	$(NASM) -f win64 -DWIN64 -Isrc/ $< -o $@
 $(B)/gfx.obj: src/gfx.asm $(CORE_DEPS) README.md | $(B)
 	$(NASM) -f win64 -DWIN64 $(VERFLAG) -Isrc/ $< -o $@
+$(B)/dec.obj: src/peep.asm src/abi.inc | $(B)
+	$(NASM) -f win64 -DWIN64 -Isrc/ $< -o $@
+$(B)/flac.obj: src/flac.asm src/abi.inc | $(B)
+	$(NASM) -f win64 -DWIN64 -Isrc/ $< -o $@
 $(B)/codecs.obj: src/codecs.c | $(B)
 	$(MINGW) $(CODEC_CFLAGS) -c $< -o $@
 $(B)/res.obj: res/peep.rc res/peep.ico | $(B)
 	$(WINDRES) $< -O coff -o $@
-$(B)/Peep.exe: $(B)/core.obj $(B)/meta.obj $(B)/gfx.obj $(B)/win32.obj $(B)/codecs.obj $(B)/res.obj
+$(B)/Peep.exe: $(B)/core.obj $(B)/meta.obj $(B)/gfx.obj $(B)/win32.obj $(B)/dec.obj $(B)/flac.obj $(B)/codecs.obj $(B)/res.obj
 	$(MINGW) -s -mwindows -static-libgcc -Wl,--gc-sections -o $@ $^ \
 		-lshell32 -lwinmm -lgdi32 -luser32 -lkernel32
 exe: $(B)/Peep.exe

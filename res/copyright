@@ -30,7 +30,7 @@ License: Unlicense
  .
  For more information, please refer to https://unlicense.org/
 
-Files: third_party/dr_mp3.h third_party/dr_flac.h third_party/dr_wav.h
+Files: third_party/dr_mp3.h third_party/dr_wav.h
 Copyright: David Reid
 License: public-domain or MIT-0
  Choice of public domain (Unlicense) or MIT No Attribution, as stated at

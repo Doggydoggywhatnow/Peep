@@ -2,6 +2,36 @@
 
 All notable changes to Peep.
 
+## 0.3.0
+
+### Changed
+- Peep now decodes FLAC and 16-bit PCM WAV with its own assembly decoders,
+  which replace the `dr_flac` C library and the old WAV code. The decoders are
+  the ones from the Liberated Peep (lib-Peep) project, brought in as part of
+  Peep and adapted to its conventions. FLAC is checked against ground truth
+  (120 random streams using every feature of the format, 285 seeks) and fuzzed
+  with guard pages around every buffer; WAV against 2,505 checks of header
+  layouts, chunk sizes, channel counts, volume and seeking. Those suites are
+  now part of `make test`.
+- The same 15 test files (WAV in five sample formats, FLAC mono / stereo /
+  24-bit / 48 kHz / six-channel, MP3, Ogg) play with byte-for-byte identical
+  output before and after the change.
+- Smaller: the Linux program shrank from 279 KB to 218 KB and the Windows
+  `.exe` from 301 KB to 247 KB, since `dr_flac` (about 90 KB) is gone.
+- `make pure`, the assembly-only build with no C at all, now plays FLAC as well
+  as WAV.
+- MP3, Ogg Vorbis and the WAV formats that are not 16-bit PCM (24-bit, float,
+  8-bit) still use the C libraries, now plugged in behind the new decoders.
+
+### Removed
+- FLAC files with more than 24 bits per sample no longer play. The old C
+  decoder accepted up to 32 bits; the new one does 4 to 24. Such files are
+  rare (the common high-resolution FLAC is 24-bit).
+
+### Fixed
+- The README said the clock wakes four times a second; since 0.2.9 it wakes
+  once a second and not at all while paused.
+
 ## 0.2.15
 
 ### Changed

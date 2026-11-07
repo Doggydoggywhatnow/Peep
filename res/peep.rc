@@ -1,7 +1,7 @@
 1 ICON "peep.ico"
 1 VERSIONINFO
-FILEVERSION 0,2,15,0
-PRODUCTVERSION 0,2,15,0
+FILEVERSION 0,3,0,0
+PRODUCTVERSION 0,3,0,0
 BEGIN
   BLOCK "StringFileInfo"
   BEGIN
@@ -9,7 +9,7 @@ BEGIN
     BEGIN
       VALUE "FileDescription", "Peep music player"
       VALUE "ProductName", "Peep"
-      VALUE "FileVersion", "0.2.15"
+      VALUE "FileVersion", "0.3.0"
       VALUE "OriginalFilename", "Peep.exe"
     END
   END

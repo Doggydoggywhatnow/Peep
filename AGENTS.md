@@ -17,7 +17,7 @@ Released under the Unlicense.
   code, no telemetry, nothing written to disk), never remove features without
   being told to, keep Linux and Windows both supported.
 * **Version bumps.** Any change to what ships (program, packages, README,
-  CHANGELOG, license) is a patch bump (0.2.15 -> 0.2.16). **Do not go to 1.0.0
+  CHANGELOG, license) is a patch bump (0.3.0 -> 0.3.1). **Do not go to 1.0.0
   unless the owner says so.** Contributor-only changes (this file, `tests/`)
   don't need one.
 * **Check before pushing** `main`: `git status`, `git log -3`,
@@ -36,6 +36,8 @@ Released under the Unlicense.
 ```
 src/abi.inc     calling-convention glue: one source, two ABIs (read it first)
 src/core.asm    playlist, player thread, mixer, cover worker thread, input
+src/peep.asm    decoder kernel: 16-bit PCM WAV, channel mapping, codec dispatch
+src/flac.asm    native FLAC decoder (both from lib-Peep, in Peep's own glue)
 src/gfx.asm     scaling, overlay, text, hover/fade, clock scheduling
 src/meta.asm    tag parsing (ID3, FLAC, Ogg, WAV)
 src/linux.asm   X11 window, ALSA, drag and drop, resize sync, startup order
@@ -92,7 +94,7 @@ sound card or window manager; see `tests/README.md`.
 ## Releasing
 
 1. Change the code and run `make test`. Fix failures; don't skip them.
-2. Bump the version everywhere it appears. `grep -rn "0.2.15\|0,2,15" .`:
+2. Bump the version everywhere it appears. `grep -rn "0.3.0\|0,3,0" .`:
    the README title and download table, `res/peep.rc` (**both** the numeric
    `FILEVERSION`/`PRODUCTVERSION` and the text `FileVersion`; the numeric
    ones were once forgotten), and `CHANGELOG.md`.
@@ -119,7 +121,7 @@ sound card or window manager; see `tests/README.md`.
 * Measure before optimizing and keep numbers in the CHANGELOG; the decoders
   were already negligible (about 0.05% of a core), so `-Os` stays.
 
-## Known limits (as of 0.2.15)
+## Known limits (as of 0.3.0)
 
 Written by the agent that built the first version. Check these against the
 code before relying on them.
@@ -137,7 +139,7 @@ code before relying on them.
 * Linux is X11 (or XWayland) and ALSA's `default` device only. No native
   Wayland, no JACK.
 * x86-64 only. No ARM builds and no macOS.
-* Audio: MP3, FLAC, Ogg **Vorbis** and WAV. No Opus, AAC/M4A or WMA.
+* Audio: MP3, FLAC (4 to 24 bit; not 32), Ogg **Vorbis** and WAV. No Opus, AAC/M4A or WMA.
 * Covers come only from the file's tags (JPEG, PNG, BMP, GIF). There is no
   `folder.jpg` fallback and no WebP.
 * Playback is path order. No shuffle, repeat or saved queue. A drop replaces

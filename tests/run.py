@@ -72,8 +72,9 @@ def build():
         (SHIM, [TESTS / "shim.c"],
          ["gcc", *cflags, "-shared", "-fPIC", str(TESTS / "shim.c"), "-o", str(SHIM),
           "-ldl", "-lpthread", "-lX11"]),
-        (CODEC, [TESTS / "codec_seek.c", codecs],
-         ["gcc", *cflags, str(TESTS / "codec_seek.c"), str(codecs), "-o", str(CODEC), "-lm"]),
+        (CODEC, [TESTS / "codec_seek.c", codecs, ROOT / "build" / "dec.o", ROOT / "build" / "flac.o"],
+         ["gcc", *cflags, str(TESTS / "codec_seek.c"), str(ROOT / "build" / "dec.o"),
+          str(ROOT / "build" / "flac.o"), str(codecs), "-o", str(CODEC), "-lm"]),
     ):
         if out.exists() and all(out.stat().st_mtime > i.stat().st_mtime for i in inputs):
             continue  # up to date
@@ -682,14 +683,71 @@ def cover_per_track():
 
 @check
 def codec_seek():
-    """Seeking lands on exactly the right samples in MP3, FLAC and Ogg."""
+    """Seeking lands on exactly the right samples in MP3, Ogg, FLAC and WAV."""
     need("ffmpeg")
     done = []
-    for f in (long_mp3(), converted("flac", "-c:a", "flac"), converted("ogg", "-c:a", "libvorbis")):
-        r = subprocess.run([str(CODEC), str(f)], capture_output=True, text=True)
+    for f, mode in ((long_mp3(), "shim"), (converted("ogg", "-c:a", "libvorbis"), "shim"),
+                    (converted("flac", "-c:a", "flac"), "kernel"), (ramp_wav(), "kernel")):
+        r = subprocess.run([str(CODEC), mode, str(f)], capture_output=True, text=True)
         assert r.returncode == 0, "%s: %s" % (f.suffix, r.stdout.strip() or r.stderr.strip())
         done.append(f.suffix[1:])
     return "exact in " + ", ".join(done)
+
+
+def decoder_tools():
+    """Build lib-Peep's decoder test tools against the objects linked into Peep."""
+    need("gcc")
+    try:
+        import numpy  # noqa: F401
+    except ImportError:
+        raise Skip("needs numpy (python3 -m pip install numpy)")
+    objs = [ROOT / "build" / "dec.o", ROOT / "build" / "flac.o"]
+    out = {}
+    for name, src, extra in (("peepdump", "peepdump.c", ["-O2", "-DNO_DR"]), ("fuzz", "fuzz.c", ["-O1", "-g"])):
+        exe, sp = BUILD / name, TESTS / "decoders" / src
+        if not exe.exists() or any(exe.stat().st_mtime <= p.stat().st_mtime for p in [sp, *objs]):
+            subprocess.run(["gcc", "-w", *extra, "-I", str(TESTS / "decoders"), "-o", str(exe), str(sp),
+                            *map(str, objs)], check=True)
+        out[name] = exe
+    return out
+
+
+@check
+def wav_decoder():
+    """The built-in WAV decoder: header variants, chunk layouts, channel counts, volume, seeking."""
+    t = decoder_tools()
+    r = subprocess.run([sys.executable, str(TESTS / "decoders" / "testwav.py"), str(t["peepdump"])],
+                       capture_output=True, text=True)
+    assert r.returncode == 0 and " 0 failures" in r.stdout, (r.stdout + r.stderr).strip()[-400:]
+    return r.stdout.strip().splitlines()[-1]
+
+
+@check
+def flac_decoder():
+    """The native FLAC decoder against ground truth: random streams using every feature of the format."""
+    t = decoder_tools()
+    r = subprocess.run([sys.executable, str(TESTS / "decoders" / "mkflac.py"), "--run", "120", "--seed", "1",
+                        "--tool", str(t["peepdump"])], capture_output=True, text=True)
+    assert r.returncode == 0 and " 0 failures" in r.stdout, (r.stdout + r.stderr).strip()[-400:]
+    return r.stdout.strip().splitlines()[-1]
+
+
+@check
+def decoder_fuzz():
+    """Mutated WAV and FLAC input never makes the decoders read or write out of bounds (guard pages)."""
+    t = decoder_tools()
+    seeds = BUILD / "seeds"
+    seeds.mkdir(exist_ok=True)
+    files = []
+    for n in (1, 10, 13, 15, 17, 19):
+        f = seeds / ("s%d.flac" % n)
+        if not f.exists():
+            subprocess.run([sys.executable, str(TESTS / "decoders" / "mkflac.py"), "--gen",
+                            str(seeds / ("s%d" % n)), "--seed", str(n)], check=True, capture_output=True)
+        files.append(str(f))
+    r = subprocess.run([str(t["fuzz"]), "100000", *files], capture_output=True, text=True, timeout=300)
+    assert r.returncode == 0 and "no crash" in r.stdout + r.stderr, (r.stdout + r.stderr).strip()[-400:]
+    return (r.stdout + r.stderr).strip().splitlines()[-1]
 
 
 @check

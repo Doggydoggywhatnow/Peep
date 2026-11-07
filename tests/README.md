@@ -29,7 +29,10 @@ missing); the exit code is 1 if anything fails.
 | `quit_speed` | Q exits within milliseconds while playing, paused, seeking and skipping |
 | `track_gap` | moving to the next track leaves no silent gap |
 | `cover_per_track` | the cover on screen is the playing track's, even after rapid skipping |
-| `codec_seek` | seeking lands on exactly the right samples in MP3, FLAC and Ogg |
+| `codec_seek` | seeking lands on exactly the right samples in MP3, Ogg, FLAC and WAV |
+| `wav_decoder` | the built-in WAV decoder against 2,505 checks: header variants, chunk layouts, channel counts, volume, seeking, files that must be rejected (needs numpy) |
+| `flac_decoder` | the native FLAC decoder against ground truth: 120 random streams using every feature of the format, with seeks (needs numpy) |
+| `decoder_fuzz` | 100,000 mutated WAV/FLAC inputs with guard pages around every buffer: no out-of-bounds read or write (needs numpy) |
 | `stress_valgrind` | rapid skipping and fullscreen toggling cause no memory errors |
 
 ## Needs

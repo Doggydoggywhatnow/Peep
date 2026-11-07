@@ -3,24 +3,23 @@
  *
  * This is the only C in Peep. It exists so the assembly can call
  * well-tested public-domain libraries through one tiny API:
- *   - audio: dr_mp3, dr_flac, dr_wav, stb_vorbis
+ *   - audio: dr_mp3, dr_wav, stb_vorbis (MP3, Ogg Vorbis, and the WAV formats
+ *     that are not 16-bit PCM; core.asm plugs this in behind its native
+ *     decoders, which do 16-bit PCM WAV and FLAC themselves)
  *   - cover art: stb_image (JPEG, PNG, BMP, GIF)
  *   - custom fonts: stb_truetype (TTF, OTF, TTC)
  * Everything else — windowing, drag & drop, playlists, tag parsing, audio
  * output, mixing, image scaling, text layout, rendering, input — is
  * hand-written assembly in src/*.asm.
  *
- * Build `make pure` to leave this file out entirely: Peep then plays
- * 16-bit PCM WAV with its own assembly decoder and nothing else.
+ * Build `make pure` to leave this file out entirely: Peep then plays 16-bit
+ * PCM WAV and FLAC with its own assembly decoders and nothing else.
  *
  * Decoding happens entirely from memory (the assembly maps the file), so no
  * stdio is compiled in.
  */
 #define DR_MP3_IMPLEMENTATION
 #define DR_MP3_NO_STDIO
-#define DR_FLAC_IMPLEMENTATION
-#define DR_FLAC_NO_STDIO
-#define DR_FLAC_NO_OGG
 #define DR_WAV_IMPLEMENTATION
 #define DR_WAV_NO_STDIO
 #define STB_VORBIS_NO_STDIO
@@ -39,14 +38,13 @@ static double peep_fmod(double x, double y) { return x - trunc(x / y) * y; }
 #define STB_TRUETYPE_IMPLEMENTATION
 #include "../third_party/stb_truetype.h"
 #include "../third_party/dr_mp3.h"
-#include "../third_party/dr_flac.h"
 #include "../third_party/dr_wav.h"
 #include "../third_party/stb_vorbis.c"
 
 #include <stdlib.h>
 #include <string.h>
 
-/* Layout mirrored by DEC_* in src/abi.inc. Do not reorder. */
+/* Layout mirrored by DEC_* in src/abi.inc (core.asm reads rate, ch, total). Do not reorder. */
 typedef struct {
     int                type;   /* 0  */
     void              *h;      /* 8  */
@@ -55,18 +53,11 @@ typedef struct {
     unsigned long long total;  /* 24 */
 } dec_t;
 
-enum { T_MP3 = 2, T_FLAC = 3, T_OGG = 4, T_WAV = 5 };
+enum { T_MP3 = 2, T_OGG = 4, T_WAV = 5 };
 
 int codec_open(dec_t *d, const unsigned char *p, size_t n)
 {
     d->type = 0;
-    if (n >= 4 && !memcmp(p, "fLaC", 4)) {
-        drflac *f = drflac_open_memory(p, n, NULL);
-        if (!f) return 0;
-        d->h = f; d->rate = f->sampleRate; d->ch = f->channels;
-        d->total = f->totalPCMFrameCount; d->type = T_FLAC;
-        return 1;
-    }
     if (n >= 4 && !memcmp(p, "OggS", 4)) {
         int err;
         stb_vorbis *v = stb_vorbis_open_memory(p, (int)n, &err, NULL);
@@ -97,7 +88,6 @@ size_t codec_read(dec_t *d, short *out, size_t frames)
 {
     switch (d->type) {
     case T_MP3:  return (size_t)drmp3_read_pcm_frames_s16(d->h, frames, out);
-    case T_FLAC: return (size_t)drflac_read_pcm_frames_s16(d->h, frames, out);
     case T_WAV:  return (size_t)drwav_read_pcm_frames_s16(d->h, frames, out);
     case T_OGG:  return (size_t)stb_vorbis_get_samples_short_interleaved(
                          d->h, (int)d->ch, out, (int)(frames * d->ch));
@@ -160,7 +150,6 @@ void codec_seek(dec_t *d, unsigned long long frame)
         if (!((drmp3 *)d->h)->pSeekPoints) mp3_index(d->h);
         drmp3_seek_to_pcm_frame(d->h, frame);
         break;
-    case T_FLAC: drflac_seek_to_pcm_frame(d->h, frame); break;
     case T_WAV:  drwav_seek_to_pcm_frame(d->h, frame); break;
     case T_OGG:  stb_vorbis_seek(d->h, (unsigned)frame); break;
     }
@@ -171,7 +160,6 @@ void codec_close(dec_t *d)
     switch (d->type) {
     case T_MP3:  { void *sp = ((drmp3 *)d->h)->pSeekPoints;
                    drmp3_uninit(d->h); free(sp); free(d->h); break; }
-    case T_FLAC: drflac_close(d->h); break;
     case T_WAV:  drwav_uninit(d->h); free(d->h); break;
     case T_OGG:  stb_vorbis_close(d->h); break;
     }

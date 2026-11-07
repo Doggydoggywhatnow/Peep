@@ -30,9 +30,11 @@ extern plat_ms              ; () -> rax monotonic milliseconds
 extern plat_thread          ; (fn) -> rax handle | 0
 extern plat_join            ; (handle)
 ; ---- C runtime ------------------------------------------------------------
-extern malloc, free, realloc, memcpy, qsort
+extern malloc, calloc, free, realloc, memcpy, qsort
+; the decoder kernel (src/peep.asm, src/flac.asm; API in src/peep.h)
+extern peep_open, peep_fill, peep_seek, peep_close, peep_codec_flac
 %ifndef PURE
-extern codec_open, codec_read, codec_seek, codec_close
+extern codec_open, codec_read, codec_seek, codec_close   ; the C shim (src/codecs.c)
 %endif
 
 global core_list_new, core_list_add, core_list_free, core_list_sort
@@ -71,10 +73,19 @@ job_hash      dq 0
 
 ; gain = 256 * (step/20)^2  — roughly perceptual
 voltab: dw 0,1,3,6,10,16,23,31,41,52,64,77,92,108,125,144,164,185,207,231,256
+; Codecs tried after the kernel's built-in 16-bit PCM WAV, in order: native
+; FLAC, then (unless PURE) the C shim for MP3, Ogg Vorbis and the other WAV formats.
+align 8
+codec_list:   dq peep_codec_flac
+%ifndef PURE
+              dq peep_codec_shim
+%endif
+              dq 0
 
 section .bss
 alignb 16
-g_dec:        resb DEC_SIZE
+g_peep:       resb PEEP_SIZE ; the open track's decoder
+dec_work      resq 1         ; its scratch memory, if a codec asked for some
 cur_list      resq 1
 cur_idx       resd 1         ; read by UI
 st_count      resd 1         ; read by UI
@@ -87,7 +98,7 @@ map_len       resq 1
 dev_rate      resd 1
 last_art      resq 1         ; player's reference to the most recent art
 alignb 16
-decbuf        resw CHUNK*MAXCH
+decbuf        resw CHUNK*2   ; the kernel always yields stereo
 outbuf        resw CHUNK*2
 
 section .text
@@ -193,157 +204,145 @@ FUNC core_publish, 0
 .r: RET_
 
 ; ============================================================================
-; Decoder dispatch: native WAV first, then the codec shim
+; Decoder: lib-Peep's kernel (built-in 16-bit PCM WAV, native FLAC) and the C
+; shim behind it. The kernel always yields interleaved stereo int16 at the
+; file's own rate; Peep applies volume in mix(), so the kernel's gain stays 256.
 ; ============================================================================
+
+%macro SET5 1
+%ifdef WIN64
+    mov  qword SARG(5), %1
+%else
+    mov  A5, %1
+%endif
+%endmacro
+%macro SET6 1
+%ifdef WIN64
+    mov  qword SARG(6), %1
+%else
+    mov  A6, %1
+%endif
+%endmacro
+
+; The kernel's open call: peep_open(&g_peep, codec_list, data, len, work, work_size).
+; Its 5th and 6th arguments go on the stack under Win64, at [rsp+32], so this is a
+; macro used inside dec_open's own frame, never a separate called routine.
+%macro PEEP_OPEN 0
+    lea  A1, [g_peep]
+    lea  A2, [codec_list]
+    mov  A3, rbx
+    mov  A4, r12
+    SET5 r14
+    SET6 r13
+    call peep_open
+%endmacro
 
 ; dec_open(p, n) -> eax 1 ok
 FUNC dec_open, 0
     ARGS rbx, r12                     ; rbx = data, r12 = length
-    lea  r15, [g_dec]
-    mov  dword [r15 + DEC_TYPE], DT_NONE
-    cmp  r12, 44
-    jb   .codec
-    cmp  dword [rbx], 'RIFF'
-    jne  .codec
-    cmp  dword [rbx + 8], 'WAVE'
-    jne  .codec
-    mov  r13, 12                      ; chunk cursor
-    xor  r14d, r14d                   ; bit0 = fmt seen and usable
-.chunk:
-    lea  rax, [r13 + 8]
-    cmp  rax, r12
-    ja   .codec
-    mov  eax, [rbx + r13]             ; id
-    mov  ecx, [rbx + r13 + 4]         ; size
-    lea  rsi, [r13 + 8]               ; body offset
-    cmp  eax, 'fmt '
-    jne  .notfmt
-    cmp  ecx, 16
-    jb   .codec
-    lea  rdx, [rsi + 16]
-    cmp  rdx, r12
-    ja   .codec
-    cmp  word [rbx + rsi], 1          ; PCM
-    jne  .codec
-    cmp  word [rbx + rsi + 14], 16    ; 16-bit
-    jne  .codec
-    movzx eax, word [rbx + rsi + 2]
-    mov  [r15 + DEC_CH], eax
-    mov  eax, [rbx + rsi + 4]
-    mov  [r15 + DEC_RATE], eax
-    mov  r14d, 1
-    jmp  .next
-.notfmt:
-    cmp  eax, 'data'
-    jne  .next
-    test r14d, r14d
-    jz   .codec                       ; data before fmt: let dr_wav cope
-    mov  rax, r12
-    sub  rax, rsi                     ; bytes really available
-    cmp  rcx, rax
-    cmova rcx, rax
-    lea  rax, [rbx + rsi]
-    mov  [r15 + DEC_DATA], rax
-    mov  eax, [r15 + DEC_CH]
+    mov  qword [dec_work], 0
+    xor  r14d, r14d                   ; no scratch memory yet
+    xor  r13d, r13d
+    PEEP_OPEN
     test eax, eax
-    jz   .codec
-    add  eax, eax                     ; block align
-    xchg rax, rcx
-    xor  edx, edx
-    div  rcx
-    mov  [r15 + DEC_TOTAL], rax
-    mov  qword [r15 + DEC_POS], 0
-    mov  dword [r15 + DEC_TYPE], DT_WAV
+    jnz  .ok
+    mov  rcx, [g_peep + PEEP_WNEED]   ; a codec wanted scratch memory: give it some
+    test rcx, rcx
+    jz   .no
+    mov  r13, rcx
+    mov  A1, 1
+    mov  A2, rcx
+    call calloc
+    test rax, rax
+    jz   .no
+    mov  [dec_work], rax
+    mov  r14, rax
+    PEEP_OPEN
+    test eax, eax
+    jnz  .ok
+    mov  A1, [dec_work]
+    call free
+    mov  qword [dec_work], 0
+.no:xor  eax, eax
+    RET_
+.ok:mov  dword [g_peep + PEEP_GAIN], 256
     mov  eax, 1
     RET_
-.next:
-    mov  eax, ecx
-    and  eax, 1                       ; odd-sized chunks carry a pad byte
-    add  rsi, rcx
-    add  rsi, rax
-    mov  r13, rsi
-    jmp  .chunk
-.codec:
-%ifdef PURE
-    xor  eax, eax
-%else
-    mov  A1, r15
-    mov  A2, rbx
-    mov  A3, r12
-    call codec_open
-%endif
-    RET_
 
-; dec_read(out, frames) -> rax frames
+; dec_read(out, frames) -> rax frames of stereo
 FUNC dec_read, 0
-    ARGS rbx, r12
-    lea  r15, [g_dec]
-    cmp  dword [r15 + DEC_TYPE], DT_WAV
-    jne  .codec
-    mov  rax, [r15 + DEC_TOTAL]
-    sub  rax, [r15 + DEC_POS]
-    cmp  r12, rax
-    cmova r12, rax
-    test r12, r12
-    jz   .z
-    mov  r13d, [r15 + DEC_CH]
-    add  r13d, r13d                   ; bytes per frame
-    mov  rax, [r15 + DEC_POS]
-    imul rax, r13
-    add  rax, [r15 + DEC_DATA]
-    mov  A1, rbx
-    mov  A2, rax
-    mov  rax, r12
-    imul rax, r13
-    mov  A3, rax
-    call memcpy
-    add  [r15 + DEC_POS], r12
-    mov  rax, r12
-    RET_
-.z: xor  eax, eax
-    RET_
-.codec:
-%ifdef PURE
-    xor  eax, eax
-%else
-    mov  A1, r15
-    mov  A2, rbx
-    mov  A3, r12
-    call codec_read
-%endif
+    mov  rdx, A2                      ; frames
+    mov  rsi, A1                      ; out
+    lea  A1, [g_peep]
+    mov  A2, rsi
+    mov  A3, rdx
+    call peep_fill
     RET_
 
-; dec_seek(frame)
+; dec_seek(frame): the kernel clamps to the end
 FUNC dec_seek, 0
-    ARGS rbx
-    lea  r15, [g_dec]
-    cmp  dword [r15 + DEC_TYPE], DT_WAV
-    jne  .codec
-    mov  rax, [r15 + DEC_TOTAL]
-    cmp  rbx, rax
-    cmova rbx, rax
-    mov  [r15 + DEC_POS], rbx
-    RET_
-.codec:
-%ifndef PURE
-    mov  A1, r15
-    mov  A2, rbx
-    call codec_seek
-%endif
+    mov  rsi, A1
+    lea  A1, [g_peep]
+    mov  A2, rsi
+    call peep_seek
     RET_
 
 FUNC dec_close, 0
-    lea  r15, [g_dec]
-    cmp  dword [r15 + DEC_TYPE], DT_WAV
-    je   .n
-    cmp  dword [r15 + DEC_TYPE], DT_NONE
-    je   .n
+    lea  A1, [g_peep]
+    call peep_close
+    mov  A1, [dec_work]
+    test A1, A1
+    jz   .n
+    call free
+    mov  qword [dec_work], 0
+.n: RET_
+
 %ifndef PURE
-    mov  A1, r15
-    call codec_close
-%endif
-.n: mov  dword [r15 + DEC_TYPE], DT_NONE
+; ---- the C shim as the kernel's last codec: MP3, Ogg Vorbis and the WAV formats
+; the built-in decoder doesn't do (not 16-bit PCM). Its decoder object (dec_t)
+; lives in the kernel's state[] bytes.
+FUNCL sh_open, 0                      ; (p, data, len) -> nonzero = mine
+    ARGS rbx, r12, r13
+    lea  A1, [rbx + PEEP_STATE]
+    mov  A2, r12
+    mov  A3, r13
+    call codec_open
+    test eax, eax
+    jz   .no
+    mov  eax, [rbx + PEEP_STATE + DEC_RATE]
+    mov  [rbx + PEEP_RATE], eax
+    mov  eax, [rbx + PEEP_STATE + DEC_CH]
+    mov  [rbx + PEEP_CH], eax
+    mov  rax, [rbx + PEEP_STATE + DEC_TOTAL]
+    mov  [rbx + PEEP_TOTAL], rax
+    mov  eax, 1
     RET_
+.no:xor  eax, eax
+    RET_
+FUNCL sh_read, 0                      ; (p, out, frames) -> frames, in the file's channels
+    ARGS rbx, r12, r13
+    lea  A1, [rbx + PEEP_STATE]
+    mov  A2, r12
+    mov  A3, r13
+    call codec_read
+    RET_
+FUNCL sh_seek, 0                      ; (p, frame)
+    ARGS rbx, r12
+    lea  A1, [rbx + PEEP_STATE]
+    mov  A2, r12
+    call codec_seek
+    RET_
+FUNCL sh_close, 0                     ; (p)
+    ARGS rbx
+    lea  A1, [rbx + PEEP_STATE]
+    call codec_close
+    RET_
+
+section .data
+align 8
+peep_codec_shim: dq sh_open, sh_read, sh_seek, sh_close
+section .text
+%endif
 
 ; ============================================================================
 ; Player thread
@@ -367,12 +366,12 @@ FUNC open_track, 16
     call dec_open
     test eax, eax
     jz   .unmap
-    mov  eax, [g_dec + DEC_CH]
+    mov  eax, [g_peep + PEEP_CH]
     test eax, eax
     jz   .close
     cmp  eax, MAXCH
     ja   .close
-    mov  eax, [g_dec + DEC_RATE]
+    mov  eax, [g_peep + PEEP_RATE]
     cmp  eax, 1000
     jb   .close
     cmp  eax, 768000
@@ -390,7 +389,7 @@ FUNC open_track, 16
     cmp  [cur_idx], ecx
     jae  .pub
 .pass:
-    mov  eax, [g_dec + DEC_RATE]
+    mov  eax, [g_peep + PEEP_RATE]
     mov  [st_rate], eax
     mov  qword [st_pos], 0
     mov  eax, 1
@@ -398,7 +397,7 @@ FUNC open_track, 16
 .pub:
     mov  A1, rbx
     call publish_info                 ; tags now; the cover decodes alongside
-    mov  eax, [g_dec + DEC_RATE]
+    mov  eax, [g_peep + PEEP_RATE]
     cmp  eax, [dev_rate]
     je   .devok
     cmp  dword [dev_rate], 0
@@ -407,16 +406,16 @@ FUNC open_track, 16
     call plat_audio_close
     mov  dword [dev_rate], 0
 .open:
-    mov  A1d, [g_dec + DEC_RATE]
+    mov  A1d, [g_peep + PEEP_RATE]
     call plat_audio_open
     test eax, eax
     jnz  .close
-    mov  eax, [g_dec + DEC_RATE]
+    mov  eax, [g_peep + PEEP_RATE]
     mov  [dev_rate], eax
 .devok:
-    mov  eax, [g_dec + DEC_RATE]
+    mov  eax, [g_peep + PEEP_RATE]
     mov  [st_rate], eax
-    mov  rax, [g_dec + DEC_TOTAL]
+    mov  rax, [g_peep + PEEP_TOTAL]
     mov  [st_total], rax
     mov  qword [st_pos], 0
     mov  dword [st_playing], 1
@@ -449,7 +448,7 @@ FUNC mix, 0
     mov  eax, [g_volstep]
     lea  rcx, [voltab]
     movzx r12d, word [rcx + rax*2]    ; gain 0..256
-    mov  r13d, [g_dec + DEC_CH]
+    mov  r13d, 2                      ; decbuf is stereo
     lea  rsi, [decbuf]
     lea  rdi, [outbuf]
     lea  r14, [r13*2]                 ; source stride in bytes

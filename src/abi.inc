@@ -63,6 +63,13 @@
     sub  rsp, OUTSZ + (((%2) + 15) & ~15) + 8
 %endmacro
 
+; FUNCL name, local_bytes: a function reached only through a pointer (the
+; decoder's codec tables). Same as FUNC; the name documents that it is not
+; called by label.
+%macro FUNCL 2
+    FUNC %1, %2
+%endmacro
+
 %macro RET_ 0
     lea  rsp, [rbp - 56]
     pop  r15
@@ -106,18 +113,20 @@ K_NEXT       equ 6
 K_PREV       equ 7
 K_UI         equ 8
 
-; decoder object (C shim uses the first 32 bytes; see src/codecs.c)
-DEC_TYPE     equ 0
-DEC_H        equ 8
+; the decoder kernel's player object (src/peep.h, struct peep: 160 bytes)
+PEEP_POS     equ 24            ; frame cursor
+PEEP_TOTAL   equ 32            ; frames, 0 = unknown
+PEEP_RATE    equ 40            ; Hz
+PEEP_CH      equ 44            ; channels of the source
+PEEP_GAIN    equ 48            ; q8, 256 = unity (Peep applies volume in its mixer)
+PEEP_WNEED   equ 144           ; scratch bytes a codec wanted, valid after a failed open
+PEEP_SIZE    equ 160
+PEEP_STATE   equ 72            ; 56 bytes a codec may use: the C shim keeps its dec_t here
+
+; the C shim's decoder object (src/codecs.c dec_t). Do not reorder.
 DEC_RATE     equ 16
 DEC_CH       equ 20
 DEC_TOTAL    equ 24
-DEC_DATA     equ 32            ; native WAV: pointer to sample data
-DEC_POS      equ 40            ; native WAV: current frame
-DEC_SIZE     equ 64
-
-DT_NONE      equ 0
-DT_WAV       equ 1             ; native assembly decoder
 
 ; playlist object
 PL_COUNT     equ 0
