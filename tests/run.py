@@ -463,8 +463,19 @@ def pause_silence():
     assert len(drops) >= 2, "pause did not drop the queued audio"
     src, heard = wav_data(ramp_wav()), (LOGS / "heard.raw").read_bytes()
     n = prog[-1][1] * 4
-    assert heard[:n] == src[:n], "the heard audio differs from the file (gap or repeat)"
-    return "tail %.0f/%.0f ms, %.1f s of audio identical" % (tails[0], tails[1], n / 4 / SR)
+    # Between the pauses the audio must be the file, frame for frame. At each pause Peep rewinds to the point being
+    # heard, read from the device just before it drops the queue, so the device may play one more frame in between
+    # and that frame is heard again: up to 2 frames of overlap per pause, which no ear can hear and no program can avoid.
+    cuts = [0] + [d[2] for d in drops if 0 < d[2] < n // 4] + [n // 4]
+    want = 0
+    for a_, b_ in zip(cuts, cuts[1:]):
+        k = src.find(heard[a_ * 4: a_ * 4 + 16]) // 4
+        assert src.find(heard[a_ * 4: a_ * 4 + 16]) >= 0 and abs(k - want) <= 2, \
+            "after the pause at frame %d the audio resumes at frame %d, not %d (gap or repeat)" % (a_, k, want)
+        assert heard[a_ * 4: b_ * 4] == src[k * 4: k * 4 + (b_ - a_) * 4], \
+            "the heard audio differs from the file between frames %d and %d" % (a_, b_)
+        want = k + (b_ - a_)
+    return "tail %.0f/%.0f ms, %.1f s of audio identical (to within 2 frames at each pause)" % (tails[0], tails[1], n / 4 / SR)
 
 
 @check

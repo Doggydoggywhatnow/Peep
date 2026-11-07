@@ -255,13 +255,24 @@ FUNC dec_open, 0
     xor  r13d, r13d
     PEEP_OPEN
     test eax, eax
-    jnz  .ok
-    mov  rcx, [g_peep + PEEP_WNEED]   ; a codec wanted scratch memory: give it some
-    test rcx, rcx
+    jz   .first
+    ; Opened. But a codec earlier in the list may have wanted scratch memory for this
+    ; very file and been skipped for lack of it (ADPCM WAV, FLAC), leaving it to a
+    ; later codec: the C shim takes almost any bytes for MP3. Open it again with the
+    ; memory, so the right codec gets it.
+    mov  r13, [g_peep + PEEP_WNEED]
+    test r13, r13
+    jz   .ok
+    lea  A1, [g_peep]
+    call peep_close
+    jmp  .need
+.first:
+    mov  r13, [g_peep + PEEP_WNEED]   ; a codec wanted scratch memory: give it some
+    test r13, r13
     jz   .no
-    mov  r13, rcx
+.need:
     mov  A1, 1
-    mov  A2, rcx
+    mov  A2, r13
     call calloc
     test rax, rax
     jz   .no
