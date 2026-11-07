@@ -2,6 +2,24 @@
 
 All notable changes to Peep.
 
+## 0.4.4
+
+### Fixed
+- **Spamming Next or Previous no longer flashes the covers in between.** When
+  the keys come faster than a cover decodes (about 20 ms), the cover and title
+  of a track that was only passed through are dropped instead of shown, so the
+  window no longer briefly jumps to that cover's shape. In 10 of 10 test
+  bursts the screen went straight to the last track (before, about 5 of 8
+  flashed), with about a third of the CPU. A single press is as quick as before.
+
+### Changed
+- **Faster cover decoding on Linux.** The C code (cover, MP3 and Ogg decoders)
+  is built with `-O3` for CPUs with SSE4.2 (any x86-64 CPU from 2009 on): PNG
+  covers decode about a third faster (39 ms to 25 ms for a 1400x1400 image),
+  JPEG about 1 ms faster. The pictures and audio are bit-for-bit identical.
+  The cost is size: the Linux program is 378 KB (was 189 KB). Windows is
+  unchanged.
+
 ## 0.4.3
 
 ### Changed

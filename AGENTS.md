@@ -139,7 +139,8 @@ code before relying on them.
 **By design or not yet built**
 * Linux is X11 (or XWayland) and ALSA's `default` device only. No native
   Wayland, no JACK.
-* x86-64 only. No ARM builds and no macOS.
+* x86-64 only. No ARM builds and no macOS. The Linux and musl builds compile the C with
+  `-O3 -march=x86-64-v2` (`CODEC_CFLAGS_LINUX`), so they need SSE4.2; Windows stays `-Os`.
 * Audio: MP3, FLAC (4 to 31 bit; not 32), Ogg **Vorbis** and WAV (8 to 32-bit PCM and
   float, up to 8 channels). No Opus, AAC/M4A or WMA, and no A-law, µ-law or ADPCM WAV.
 * Covers come only from the file's tags (JPEG, PNG, BMP, GIF). There is no
