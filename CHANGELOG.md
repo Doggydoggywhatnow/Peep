@@ -2,10 +2,10 @@
 
 All notable changes to Peep.
 
-## 0.4.2
+## 0.4.1
 
 ### Added
-- **A build for musl Linux (Void musl, Alpine).** `Peep-0.4.2-x86_64-musl` is one
+- **A build for musl Linux (Void musl, Alpine).** `Peep-0.4.1-x86_64-musl` is one
   file that asks for musl's loader, not glibc 2.34, so it runs where the other
   Linux downloads cannot. It needs libX11, libXext and ALSA, which those systems
   have. `make musl` builds it (with `musl-gcc`). Threads get an 8 MB stack there,
@@ -13,8 +13,6 @@ All notable changes to Peep.
 - Checked: the MP3, Ogg, FLAC and WAV decoders seek to exactly the right sample
   when run on musl's libc. Not yet run on a real musl desktop: the window and
   sound paths there are untested, so please report what you find.
-
-## 0.4.1
 
 ### Fixed
 - **Seeking is exact.** The arrow keys moved from where the decoder was, which
