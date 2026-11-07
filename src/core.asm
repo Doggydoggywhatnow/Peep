@@ -932,8 +932,22 @@ FUNC art_worker, 0
 .pub:
     mov  A1, [job_buf]
     call free
+    ; Decoding takes ~20 ms, by which time a burst of Next/Previous keys is long
+    ; over: if the player has moved on from this track, it is one the burst only
+    ; passed through, so don't show it (no flash, no window resize for it).
+    call skip_pending
+    test eax, eax
+    jnz  .late
+    mov  eax, [cur_idx]
+    cmp  eax, [job_idx]
+    jne  .late
     mov  A1, rbx
     call hand_over
+    xor  eax, eax
+    RET_
+.late:
+    mov  A1, rbx
+    call info_free
     xor  eax, eax
     RET_
 .drop:

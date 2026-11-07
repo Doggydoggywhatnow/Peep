@@ -844,8 +844,14 @@ def key_spam():
             cpu2.close()
     frames2, _, m2 = read_lat()
     prog2, _, drops2 = read_prog()
+    sizes2 = read_frames()
     for k in ("next", "prev"):
         res[k] = spam_metrics(k, 20, m2, frames2, prog2, drops2, cpu2)
+        t0, t1 = m2["S_%s_BEGIN" % k], m2["S_%s_SETTLE" % k]
+        # the middle cover is the wide one (1360x971): a burst that ends on the first or last track must not show it
+        res[k]["intermediate_cover_frames"] = sum(1 for t, h, sz in sizes2 if t0 <= t <= t1 and sz == "1360x971")
+        if res[k]["intermediate_cover_frames"]:
+            problems.append("%s: %d frames showed a track the burst only passed through" % (k, res[k]["intermediate_cover_frames"]))
     for k, ok in (("next", lambda r_, g, b_: b_ > r_ + 60), ("prev", lambda r_, g, b_: r_ > b_ + 60)):
         im = Image.open(LOGS / ("spam_%s.ppm" % k)).convert("RGB")
         c = im.getpixel((im.width // 2, im.height // 2))
