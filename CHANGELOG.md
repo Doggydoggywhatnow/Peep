@@ -2,6 +2,21 @@
 
 All notable changes to Peep.
 
+## 0.4.3
+
+### Changed
+- **Key bursts are cheaper.** Many arrow-key presses in a row are now carried
+  out as one seek, so 20 quick presses make one audio flush and 2 or 3 frames
+  instead of 5 frames and 2 flushes. A lone press still reacts at once
+  (key to sound about 5 ms, was 3).
+- On Linux, a new picture is drawn at once, but further changes within 4 ms
+  share one frame. A burst of volume presses draws 2 or 3 frames instead of 5.
+- When Next or Previous is pressed many times quickly, the cover of a track
+  that is only passed through is no longer decoded or shown, when Peep can
+  tell in time. This helped in about 3 of 8 test bursts; a single press is as
+  quick as before. (Windows keeps its old behaviour for the timing parts,
+  because its clock is too coarse.)
+
 ## 0.4.2
 
 ### Fixed
