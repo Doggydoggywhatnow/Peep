@@ -64,8 +64,6 @@ cmd_seek      dd 0          ; seconds to seek (+/-), accumulated; the UI shows
 seek_taken    dd 0          ; the part of cmd_seek being carried out
 pause_done    dd 0          ; the queued audio was dropped for this pause
 mix_gain      dd -1         ; gain at the end of the last chunk (-1: none yet)
-vol_ms        dq 0          ; when a volume key was last pressed
-cmd_refill    dd 0          ; volume changed: re-render the queued audio
 art_thr       dq 0          ; cover-decoding thread, 0 when none
 job_info      dq 0          ; its track info
 job_buf       dq 0          ; its copy of the picture bytes
@@ -620,28 +618,11 @@ FUNC play_track, 0
     call plat_wake                    ; redraw with the real position
 .noseek:
     ; --- volume -----------------------------------------------------------
-    ; The device still holds up to ~100-200 ms mixed at the old volume. Drop
-    ; it and decode again from the point actually being heard, so a volume
-    ; key takes effect at once.
-    xor  eax, eax
-    xchg eax, [cmd_refill]
-    test eax, eax
-    jz   .novol
-    cmp  dword [g_paused], 0
-    jne  .novol
-    call plat_audio_queued
-    test rax, rax
-    jle  .novol
-    mov  rbx, [st_pos]
-    sub  rbx, rax
-    jns  .v1
-    xor  ebx, ebx
-.v1:
-    call plat_audio_flush
-    lea  A1, [g_peep]
-    mov  A2, rbx
-    call peep_seek
-    mov  [st_pos], rbx
+    ; Nothing to do: a volume key only sets g_volstep, and mix() glides to it over
+    ; the next chunk. (Dropping the queued audio so a lone press is heard at once
+    ; used to be done here; on a real device that stops and restarts the stream,
+    ; which is a glitch of its own. The change is heard within the device buffer,
+    ; ~100 ms, and never interrupts the sound.)
 .novol:
     cmp  dword [g_paused], 0
     je   .play
@@ -1040,20 +1021,6 @@ FUNC core_player, 0
 ; ============================================================================
 ; Input
 ; ============================================================================
-; vol_touched(): a volume key was pressed. A lone press is heard at once (the
-; player drops the queued audio and re-mixes it). A key being held repeats
-; every ~30 ms, and doing that each time would stutter the sound: while it is
-; held only new audio gets the new gain, which the mixer ramps smoothly.
-FUNC vol_touched, 0
-    call plat_ms
-    mov  rcx, rax
-    sub  rax, [vol_ms]
-    mov  [vol_ms], rcx
-    cmp  rax, 400
-    jb   .r
-    mov  dword [cmd_refill], 1
-.r: RET_
-
 ; core_key(k) -> eax 1 if the screen should be redrawn
 FUNC core_key, 0
     mov  ebx, A1d                     ; plat_ms below clobbers the argument register
@@ -1099,14 +1066,12 @@ FUNC core_key, 0
     cmp  dword [g_volstep], 20
     jae  .yes
     inc  dword [g_volstep]
-    call vol_touched
     jmp  .yes
 .k5:cmp  eax, K_VOLDN
     jne  .k6
     cmp  dword [g_volstep], 0
     je   .yes
     dec  dword [g_volstep]
-    call vol_touched
     jmp  .yes
 .k6:cmp  eax, K_NEXT
     jne  .k7
