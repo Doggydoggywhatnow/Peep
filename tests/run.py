@@ -72,9 +72,11 @@ def build():
         (SHIM, [TESTS / "shim.c"],
          ["gcc", *cflags, "-shared", "-fPIC", str(TESTS / "shim.c"), "-o", str(SHIM),
           "-ldl", "-lpthread", "-lX11"]),
-        (CODEC, [TESTS / "codec_seek.c", codecs, ROOT / "build" / "dec.o", ROOT / "build" / "flac.o"],
+        (CODEC, [TESTS / "codec_seek.c", codecs, ROOT / "build" / "dec.o", ROOT / "build" / "flac.o",
+                 ROOT / "build" / "wav.o"],
          ["gcc", *cflags, str(TESTS / "codec_seek.c"), str(ROOT / "build" / "dec.o"),
-          str(ROOT / "build" / "flac.o"), str(codecs), "-o", str(CODEC), "-lm"]),
+          str(ROOT / "build" / "flac.o"), str(ROOT / "build" / "wav.o"), str(codecs), "-o", str(CODEC),
+          "-lm"]),
     ):
         if out.exists() and all(out.stat().st_mtime > i.stat().st_mtime for i in inputs):
             continue  # up to date
@@ -518,14 +520,23 @@ def volume_hold():
     a_, b_ = progress_at(prog, t0), progress_at(prog, t1)
     s16, h16 = array.array("h"), array.array("h")
     s16.frombytes(src[: (b_ + 64) * 4]); h16.frombytes(heard[: (b_ + 64) * 4])
-    gains = []
+    gains = []                      # None where a window was skipped
+    top = len(s16) // 2 - 1
     for i in range(a_, b_, 64):
+        # the test signal's left channel is a sawtooth: a window holding a wrap would read wildly
+        # wrong if playback were out of step (rewinding after a lone press can be, by more under load), so skip it
+        if any(abs(s16[2 * min(k + 1, top)] - s16[2 * min(k, top)]) > 2000 for k in range(i - 64, i + 128)):
+            gains.append(None)
+            continue
         num = sum(h16[2 * k] * s16[2 * k] for k in range(i, i + 64))
         den = sum(s16[2 * k] * s16[2 * k] for k in range(i, i + 64))
         gains.append(256 * num / den if den else 0)
-    step = max(abs(x - y) for x, y in zip(gains, gains[1:]))
-    assert min(gains) < 5 and max(gains) > 250, "the volume did not sweep the whole range"
-    assert step < 3, "the gain jumped by %.1f/256 within 64 frames (it should glide)" % step
+    real = [g for g in gains if g is not None]
+    pairs = [(abs(x - y), n) for n, (x, y) in enumerate(zip(gains, gains[1:])) if x is not None and y is not None]
+    step, at_win = max(pairs)
+    assert min(real) < 5 and max(real) > 250, "the volume did not sweep the whole range"
+    assert step < 3, "the gain jumped by %.1f/256 within 64 frames (it should glide): window %d of %d, gains around it %s" % (
+        step, at_win, len(gains), [None if g is None else round(g, 1) for g in gains[max(0, at_win - 3): at_win + 5]])
     return "%d queue drops in 3 s of key repeat, no stall, gain moves <= %.1f/256 per 64 frames" % (
         len(held), step)
 
@@ -683,11 +694,12 @@ def cover_per_track():
 
 @check
 def codec_seek():
-    """Seeking lands on exactly the right samples in MP3, Ogg, FLAC and WAV."""
+    """Seeking lands on exactly the right samples in MP3, Ogg, FLAC, 16-bit and 24-bit WAV."""
     need("ffmpeg")
     done = []
     for f, mode in ((long_mp3(), "shim"), (converted("ogg", "-c:a", "libvorbis"), "shim"),
-                    (converted("flac", "-c:a", "flac"), "kernel"), (ramp_wav(), "kernel")):
+                    (converted("flac", "-c:a", "flac"), "kernel"), (ramp_wav(), "kernel"),
+                    (converted("wav", "-c:a", "pcm_s24le"), "kernel")):
         r = subprocess.run([str(CODEC), mode, str(f)], capture_output=True, text=True)
         assert r.returncode == 0, "%s: %s" % (f.suffix, r.stdout.strip() or r.stderr.strip())
         done.append(f.suffix[1:])
@@ -701,7 +713,7 @@ def decoder_tools():
         import numpy  # noqa: F401
     except ImportError:
         raise Skip("needs numpy (python3 -m pip install numpy)")
-    objs = [ROOT / "build" / "dec.o", ROOT / "build" / "flac.o"]
+    objs = [ROOT / "build" / "dec.o", ROOT / "build" / "flac.o", ROOT / "build" / "wav.o"]
     out = {}
     for name, src, extra in (("peepdump", "peepdump.c", ["-O2", "-DNO_DR"]), ("fuzz", "fuzz.c", ["-O1", "-g"])):
         exe, sp = BUILD / name, TESTS / "decoders" / src
@@ -712,9 +724,20 @@ def decoder_tools():
     return out
 
 
+def run_suite(script, *args, tool=True):
+    t = decoder_tools()
+    cmd = [sys.executable, str(TESTS / "decoders" / script), *args]
+    if tool:
+        cmd += ["--tool", str(t["peepdump"])]
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    out = (r.stdout + r.stderr).strip()
+    assert r.returncode == 0 and " 0 failures" in r.stdout, out[-400:]
+    return r.stdout.strip().splitlines()[-1]
+
+
 @check
 def wav_decoder():
-    """The built-in WAV decoder: header variants, chunk layouts, channel counts, volume, seeking."""
+    """The built-in 16-bit WAV decoder: header variants, chunk layouts, channel counts, volume, seeking."""
     t = decoder_tools()
     r = subprocess.run([sys.executable, str(TESTS / "decoders" / "testwav.py"), str(t["peepdump"])],
                        capture_output=True, text=True)
@@ -723,13 +746,31 @@ def wav_decoder():
 
 
 @check
+def wavx_decoder():
+    """The other WAV formats (8/12/16/20/24/32-bit PCM, 32/64-bit float) against an independent model."""
+    return run_suite("testwavx.py", "--run", "240", "--seed", "1")
+
+
+@check
 def flac_decoder():
     """The native FLAC decoder against ground truth: random streams using every feature of the format."""
+    return run_suite("mkflac.py", "--run", "120", "--seed", "1")
+
+
+@check
+def flac_crc():
+    """Damaged FLAC frames are detected by their CRC, counted, and skipped without stopping playback."""
     t = decoder_tools()
-    r = subprocess.run([sys.executable, str(TESTS / "decoders" / "mkflac.py"), "--run", "120", "--seed", "1",
-                        "--tool", str(t["peepdump"])], capture_output=True, text=True)
-    assert r.returncode == 0 and " 0 failures" in r.stdout, (r.stdout + r.stderr).strip()[-400:]
+    r = subprocess.run([sys.executable, str(TESTS / "decoders" / "testcrc.py"), "--run", "300", "--seed", "1",
+                        "--tool", str(t["peepdump"])], capture_output=True, text=True, timeout=600)
+    assert r.returncode == 0 and r.stdout.strip().endswith(" 0 wrong"), (r.stdout + r.stderr).strip()[-400:]
     return r.stdout.strip().splitlines()[-1]
+
+
+@check
+def hires_output():
+    """Full-resolution (24-bit and wider) output, volume and the 16-bit conversion, bit-exact against a model."""
+    return run_suite("testhires.py", "--run", "120", "--seed", "1", "--no-legacy")
 
 
 @check
@@ -745,6 +786,10 @@ def decoder_fuzz():
             subprocess.run([sys.executable, str(TESTS / "decoders" / "mkflac.py"), "--gen",
                             str(seeds / ("s%d" % n)), "--seed", str(n)], check=True, capture_output=True)
         files.append(str(f))
+    if not (seeds / "w0.wav").exists():
+        subprocess.run([sys.executable, str(TESTS / "decoders" / "testwavx.py"), "--gen", str(seeds)],
+                       check=True, capture_output=True)
+    files += [str(seeds / ("w%d.wav" % n)) for n in range(5)]
     r = subprocess.run([str(t["fuzz"]), "100000", *files], capture_output=True, text=True, timeout=300)
     assert r.returncode == 0 and "no crash" in r.stdout + r.stderr, (r.stdout + r.stderr).strip()[-400:]
     return (r.stdout + r.stderr).strip().splitlines()[-1]

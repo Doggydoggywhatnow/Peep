@@ -237,28 +237,39 @@ def encode_frame(chans, start, number, variable, rate, bps, bps_explicit, rng):
     bw.pad()
     body = hb + bw.bytes()
     c = crc16(body)
-    return body + bytes([c >> 8, c & 0xFF])
+    return body + bytes([c >> 8, c & 0xFF]), len(hb)     # frame bytes, header length
 
 def streaminfo(minbs, maxbs, rate, nch, bps, total):
     v = (rate << 44) | ((nch - 1) << 41) | ((bps - 1) << 36) | total
     return minbs.to_bytes(2, 'big') + maxbs.to_bytes(2, 'big') + (0).to_bytes(3, 'big') * 2 + v.to_bytes(8, 'big') + bytes(16)
 
+def make_id3(rng):
+    """One or two ID3v2 tags with random payloads (some with a footer)."""
+    out = b''
+    for _ in range(rng.choice([1, 1, 2])):
+        n = rng.choice([0, 1, 100, 1000, 3000, 20000] + [2200000] * (rng.random() < .05)); footer = rng.random() < .3
+        size = bytes([(n >> 21) & 0x7F, (n >> 14) & 0x7F, (n >> 7) & 0x7F, n & 0x7F])
+        out += b'ID3' + bytes([4 if footer else 3, 0, 0x10 if footer else 0]) + size + (bytes(n) if n > 5000 else bytes(rng.randrange(256) for _ in range(n)))
+        if footer: out += b'3DI' + bytes([4, 0, 0x10]) + size
+    return out
+
 def gen_case(rng):
     nch = rng.choice([1, 2, 2, 2, 2, 3, 4, 6, 8])
-    bps = rng.choice([4, 8, 12, 16, 16, 16, 16, 20, 24])
-    rate = rng.choice([8000, 11025, 22050, 44100, 44100, 48000, 96000, 192000, 12345, 1000, 655350, 176400])
+    bps = rng.choice([4, 8, 12, 16, 16, 16, 16, 20, 24, 25, 27, 31])
+    rate = rng.choice([8000, 11025, 22050, 44100, 44100, 48000, 96000, 192000, 12345, 1000, 655350, 176400, 1000000])
     variable = rng.random() < .35
     total = rng.choice([0, 1, 2, 5, 15, 16, 17, 100, 1000, 4096, 4097, 9000, 20000, 33000])
     total = max(total, 1) if rng.random() < .97 else total
     if variable: sizes = []
     bs0 = rng.choice([16, 192, 576, 1000, 1152, 1024, 4096, 4608, 4097, 255, 256, 257, 3000, 8192, 16384, 65535, 65536 // 2])
     chans = make_signal(rng, total, nch, bps) if total else [np.zeros(0, dtype=np.int64)] * nch
-    frames = []; pos = 0; number = 0; sz = []
+    frames = []; pos = 0; number = 0; sz = []; fmeta = []
     while pos < total:
         bs = rng.choice([16, 64, 192, 300, 1000, 1152, 2048, 4096, 5000]) if variable else bs0
         bs = min(bs, total - pos)
         sz.append(bs)
-        frames.append(encode_frame([c[pos:pos + bs] for c in chans], pos, number, variable, rate, bps, rng.random() < .7, rng))
+        fb, hl = encode_frame([c[pos:pos + bs] for c in chans], pos, number, variable, rate, bps, rng.random() < .7, rng)
+        frames.append(fb); fmeta.append([pos, bs, len(fb), hl])
         pos += bs; number += 1
     if not sz: sz = [bs0]
     if variable: minbs, maxbs = min(sz), max(sz)
@@ -267,15 +278,21 @@ def gen_case(rng):
     blocks = [(0, streaminfo(minbs, maxbs, rate, nch, bps, total if rng.random() < .9 else 0))]
     for _ in range(rng.choice([0, 0, 1, 2, 4])):
         blocks.append((rng.choice([1, 2, 3, 4, 6, 5]), bytes(rng.randrange(256) for _ in range(rng.choice([0, 1, 33, 200, 3000])))))
-    out = b'fLaC'
+    prefix = make_id3(rng) if rng.random() < .25 else b''      # ID3v2 tag(s) in front of the stream
+    out = prefix + b'fLaC'
     for i, (t, d) in enumerate(blocks):
         out += bytes([(0x80 if i == len(blocks) - 1 else 0) | t]) + len(d).to_bytes(3, 'big') + d
+    base = len(out)
     out += b''.join(frames)
+    if rng.random() < .2: out += b'TAG' + bytes(rng.randrange(256) for _ in range(125))   # ID3v1-style trailer
+    off = base
+    for m in fmeta:
+        m.insert(2, off); off += m[3]          # [first sample, samples, file offset, bytes, header bytes]
     # expected PCM: interleaved int16 = (x << max(0,16-bps)) >> max(0,bps-16)
     ls, rs = max(0, 16 - bps), max(0, bps - 16)
     pcm = np.stack(chans, axis=1) if total else np.zeros((0, nch), dtype=np.int64)
     pcm = ((pcm << ls) >> rs).astype('<i2')
-    info = dict(nch=nch, bps=bps, rate=rate, variable=variable, total=total, frames=len(frames), bs=bs0)
+    info = dict(nch=nch, bps=bps, rate=rate, variable=variable, total=total, frames=len(frames), bs=bs0, frame_meta=fmeta, blocks=blocks, raw=(np.stack(chans, axis=1) if total else np.zeros((0, nch), dtype=np.int64)))
     return out, pcm, info
 
 def expected_stereo(pcm):
@@ -283,8 +300,8 @@ def expected_stereo(pcm):
     if nch == 1: return np.repeat(pcm, 2, axis=1)
     return pcm[:, :2]
 
-def run(tool, data, chunk=None, seek=None, codec=None):
-    cmd = [tool]
+def run(tool, data, chunk=None, seek=None, codec=None, extra=()):
+    cmd = [tool, *extra]
     if codec: cmd += ['-C', codec]
     if chunk: cmd += ['-c', str(chunk)]
     if seek is not None: cmd += ['-s', str(seek)]
@@ -326,6 +343,7 @@ def main():
             rc3, out3, _ = run(a.tool, data, 1024, codec='dr')
             stats['dr_disagrees'] += (out3 != exp)
             d = next((i for i in range(min(len(out), len(exp))) if out[i] != exp[i]), None)
+            info = {k: v for k, v in info.items() if k not in ('frame_meta', 'raw', 'blocks')}
             print(f'FAIL seed={seed} {info} rc={rc} out={len(out)} exp={len(exp)} first_diff_byte={d} {why} | dr_flac {"agrees with truth" if out3 == exp else "ALSO differs (encoder?)"}')
             if a.keep:
                 os.makedirs(a.keep, exist_ok=True)

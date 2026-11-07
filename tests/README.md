@@ -30,7 +30,10 @@ missing); the exit code is 1 if anything fails.
 | `track_gap` | moving to the next track leaves no silent gap |
 | `cover_per_track` | the cover on screen is the playing track's, even after rapid skipping |
 | `codec_seek` | seeking lands on exactly the right samples in MP3, Ogg, FLAC and WAV |
-| `wav_decoder` | the built-in WAV decoder against 2,505 checks: header variants, chunk layouts, channel counts, volume, seeking, files that must be rejected (needs numpy) |
+| `wav_decoder` | the built-in 16-bit WAV decoder against 2,505 checks: header variants, chunk layouts, channel counts, volume, seeking, files that must be rejected (needs numpy) |
+| `wavx_decoder` | the other WAV formats (8/12/16/20/24/32-bit PCM, 32/64-bit float, extensible headers, truncation) against an independent model (needs numpy) |
+| `flac_crc` | damaged FLAC frames are caught by their CRC-16, counted, and skipped without stopping playback (needs numpy) |
+| `hires_output` | full-resolution output, volume and the 16-bit conversion, bit-exact against a model. One group of cases (a 16-bit-only codec) needs `dr_flac`, which Peep no longer has, so it is skipped with `--no-legacy` (needs numpy) |
 | `flac_decoder` | the native FLAC decoder against ground truth: 120 random streams using every feature of the format, with seeks (needs numpy) |
 | `decoder_fuzz` | 100,000 mutated WAV/FLAC inputs with guard pages around every buffer: no out-of-bounds read or write (needs numpy) |
 | `stress_valgrind` | rapid skipping and fullscreen toggling cause no memory errors |

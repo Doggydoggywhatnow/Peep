@@ -1,4 +1,4 @@
-; Liberated Peep 0.2.0: Peep's playback kernel. See peep.h for the API.
+; Liberated Peep 0.3.1: Peep's playback kernel. See peep.h for the API.
 ;
 ; Freestanding: no libc, no malloc, no syscalls, no writable globals.
 ; Assembles for System V (Linux/macOS-style) and Microsoft x64 (-DWIN64).
@@ -9,7 +9,8 @@
 default rel
 %include "abi.inc"
 
-global peep_open, peep_fill, peep_seek, peep_close
+global peep_open, peep_fill, peep_fill32, peep_seek, peep_close
+
 
 ; struct peep (peep.h)
 P_CODEC  equ 0
@@ -27,12 +28,16 @@ P_ZERO   equ 128                  ; end of the part a failed codec open may dirt
 P_WORK   equ 128
 P_WSIZE  equ 136
 P_WNEED  equ 144
+P_ERRS   equ 152                  ; u32 damaged frames met so far (a codec increments it)
+P_DITH   equ 156                  ; u16 16-bit output mode for sources wider than 16 bits: 0 truncate, 1 round, 2 TPDF dither
+P_BITS   equ 158                  ; u16 bits per sample of the source (WAV: 16)
 P_SIZE   equ 160
 ; struct peep_codec
 C_OPEN   equ 0
 C_READ   equ 8
 C_SEEK   equ 16
 C_CLOSE  equ 24
+C_READ32 equ 32                   ; optional: full-resolution read (int32, left-justified)
 
 KIND_WAV equ 1
 KIND_COD equ 2
@@ -41,6 +46,8 @@ SCR      equ 192                  ; frames of scratch for >2-channel codecs
 SCRBYTES equ SCR * 8 * 2          ; 3072: keeps the frame under one page
 LOC_SCR  equ 32                   ; above the Win64 shadow space
 LOC_C    equ 32 + SCRBYTES
+HR_CHUNK equ 64                   ; frames per step on the full-resolution routes
+LOC_ST   equ LOC_SCR + HR_CHUNK * 8 * 4      ; stereo int32 staging area, after the source chunk
 
 section .text
 
@@ -117,6 +124,89 @@ mix_gen:
     mov  [rdi + 2], ax
     add  rsi, r8
     add  rdi, 4
+    dec  rcx
+    jnz  .l
+.d: ret
+
+; m16_32: int16 source (any channel count) -> stereo int32, left-justified, with gain.
+;   rsi = src, rdi = dst, rcx = frames, r10d = gain (0..256), r8 = source bytes per frame,
+;   r9 = byte offset of the right channel (0 = mono). (x * gain) << 8 is exact.
+m16_32:
+    test rcx, rcx
+    jz   .d
+.l: movsx eax, word [rsi]
+    imul eax, r10d
+    shl  eax, 8
+    mov  [rdi], eax
+    movsx eax, word [rsi + r9]
+    imul eax, r10d
+    shl  eax, 8
+    mov  [rdi + 4], eax
+    add  rsi, r8
+    add  rdi, 8
+    dec  rcx
+    jnz  .l
+.d: ret
+
+; m32_32: int32 source -> stereo int32 with gain at 64-bit precision: (x * gain) >> 8.
+;   rsi = src, rdi = dst (may equal src when src is stereo), rcx = frames, r10d = gain,
+;   r8 = source bytes per frame, r9 = byte offset of the right channel (0 = mono)
+m32_32:
+    test rcx, rcx
+    jz   .d
+.l: movsxd rax, dword [rsi]
+    imul rax, r10
+    sar  rax, 8
+    mov  [rdi], eax
+    movsxd rax, dword [rsi + r9]
+    imul rax, r10
+    sar  rax, 8
+    mov  [rdi + 4], eax
+    add  rsi, r8
+    add  rdi, 8
+    dec  rcx
+    jnz  .l
+.d: ret
+
+; conv16: int32 samples -> int16, saturating.   rsi = src, rdi = dst, rcx = sample count,
+;   r10d = mode: 0 truncate, 1 round to nearest, 2 TPDF dither (triangular, +-1 LSB, then round)
+;   r11d = xorshift32 state for mode 2 (the caller keeps it between calls)
+conv16:
+    test rcx, rcx
+    jz   .d
+.l: cmp  r10d, 2
+    jne  .nd
+    mov  eax, r11d                    ; xorshift32
+    shl  eax, 13
+    xor  r11d, eax
+    mov  eax, r11d
+    shr  eax, 17
+    xor  r11d, eax
+    mov  eax, r11d
+    shl  eax, 5
+    xor  r11d, eax
+    movzx eax, r11w                   ; two uniform 16-bit numbers
+    mov  edx, r11d
+    shr  edx, 16
+    lea  r8d, [rax + rdx - 65535]     ; their sum minus the mean: triangular, -65535 .. 65535
+    movsxd r8, r8d
+    movsxd rax, dword [rsi]
+    lea  rax, [rax + r8 + 32768]      ; dither + rounding offset
+    jmp  .s
+.nd:movsxd rax, dword [rsi]
+    cmp  r10d, 1
+    jne  .s
+    add  rax, 32768
+.s: sar  rax, 16
+    cmp  rax, 32767
+    jle  .a
+    mov  eax, 32767
+.a: cmp  rax, -32768
+    jge  .b
+    mov  eax, -32768
+.b: mov  [rdi], ax
+    add  rsi, 4
+    add  rdi, 2
     dec  rcx
     jnz  .l
 .d: ret
@@ -203,6 +293,7 @@ FUNC peep_open, 0
     div  rcx
     mov  [rbx + P_TOTAL], rax
     mov  dword [rbx + P_KIND], KIND_WAV
+    mov  word [rbx + P_BITS], 16
     jmp  .validate
 .next:
     mov  eax, ecx
@@ -235,12 +326,16 @@ FUNC peep_open, 0
     mov  ecx, (P_ZERO - P_RATE) / 8
     rep  stosq
     mov  dword [rbx + P_GAIN], 256
+    mov  word [rbx + P_BITS], 0
     add  r12, 8
     jmp  .cl
 .gotc:
     mov  dword [rbx + P_KIND], KIND_COD
+    cmp  word [rbx + P_BITS], 0       ; a codec that does not say is taken to be 16-bit
+    jne  .validate
+    mov  word [rbx + P_BITS], 16
 
-    ; ---- sanity: 1..8 channels, 1 kHz..768 kHz ----------------------------
+    ; ---- sanity: 1..8 channels, 1 kHz..1,048,575 Hz (FLAC's whole range) -----
 .validate:
     mov  eax, [rbx + P_CH]
     dec  eax
@@ -248,7 +343,7 @@ FUNC peep_open, 0
     ja   .bad
     mov  eax, [rbx + P_RATE]
     sub  eax, 1000
-    cmp  eax, 767000
+    cmp  eax, 1047575
     ja   .bad
     mov  eax, 1
     RET_
@@ -312,6 +407,16 @@ FUNC peep_fill, SCRBYTES + 16
 
     ; ---- codec -------------------------------------------------------------
 .cod:
+    mov  rax, [rbx + P_CODEC]         ; a source wider than 16 bits, when the volume or the output mode
+    cmp  qword [rax + C_READ32], 0    ; asks for more than plain truncation, goes through the
+    je   .cod16                       ; full-resolution path: gain first, then one rounding step
+    cmp  word [rbx + P_BITS], 16
+    jbe  .cod16
+    cmp  r14d, 256
+    jne  .hires
+    cmp  word [rbx + P_DITH], 0
+    jne  .hires
+.cod16:
     cmp  dword [rbx + P_CH], 2
     jne  .multi
     mov  A1, rbx                      ; stereo: the codec writes straight into out
@@ -367,6 +472,205 @@ FUNC peep_fill, SCRBYTES + 16
     sub  r13, rax
     jmp  .ml
 .mdone:
+    add  [rbx + P_POS], r15
+    mov  rax, r15
+    RET_
+.hires:
+    cmp  dword [rbx + P_DATA], 0      ; dither state: seeded on first use
+    jne  .hs
+    mov  dword [rbx + P_DATA], 0x9E3779B9
+.hs:xor  r15d, r15d
+.hl:test r13, r13
+    jz   .hdone
+    mov  rax, r13
+    mov  ecx, HR_CHUNK
+    cmp  rax, rcx
+    cmova rax, rcx
+    mov  [rsp + LOC_C], rax
+    mov  A1, rbx
+    lea  A2, [rsp + LOC_SCR]
+    mov  A3, rax
+    mov  rax, [rbx + P_CODEC]
+    call [rax + C_READ32]
+    test rax, rax
+    jz   .hdone
+    mov  rcx, [rsp + LOC_C]
+    cmp  rax, rcx
+    cmova rax, rcx
+    mov  [rsp + LOC_C], rax
+    lea  rsi, [rsp + LOC_SCR]
+    lea  rdi, [rsp + LOC_ST]
+    mov  rcx, rax
+    mov  r10d, r14d
+    mov  r8d, [rbx + P_CH]
+    shl  r8, 2
+    mov  r9d, 4
+    cmp  dword [rbx + P_CH], 1
+    jne  .h2
+    xor  r9d, r9d
+.h2:call m32_32                       ; to stereo, gain at full precision
+    lea  rsi, [rsp + LOC_ST]
+    mov  rdi, r12
+    mov  rcx, [rsp + LOC_C]
+    add  rcx, rcx
+    movzx r10d, word [rbx + P_DITH]
+    cmp  r10d, 2
+    jbe  .h3
+    mov  r10d, 2
+.h3:mov  r11d, [rbx + P_DATA]
+    call conv16                       ; the one reduction to 16 bits
+    mov  [rbx + P_DATA], r11d
+    mov  rax, [rsp + LOC_C]
+    lea  r12, [r12 + rax * 4]
+    add  r15, rax
+    sub  r13, rax
+    jmp  .hl
+.hdone:
+    add  [rbx + P_POS], r15
+    mov  rax, r15
+    RET_
+
+; ----------------------------------------------------------------------------
+; size_t peep_fill32(peep *p, int32_t *out, size_t frames)
+; Full resolution: interleaved stereo int32, each sample left-justified (value << (32 - bits)), so a
+; 24-bit file arrives with all 24 bits and a 16-bit file as x << 16. Volume is applied at 64-bit
+; precision. Nothing is rounded or dithered. Returns the frames written; 0 = end of stream.
+; ----------------------------------------------------------------------------
+FUNC peep_fill32, SCRBYTES + 16
+    ARGS rbx, r12, r13
+    mov  eax, [rbx + P_GAIN]
+    mov  r14d, 256
+    cmp  eax, r14d
+    cmova eax, r14d
+    mov  r14d, eax
+    mov  eax, [rbx + P_KIND]
+    cmp  eax, KIND_WAV
+    je   .wav
+    cmp  eax, KIND_COD
+    je   .cod
+.zero:
+    xor  eax, eax
+    RET_
+.wav:
+    mov  rax, [rbx + P_TOTAL]
+    sub  rax, [rbx + P_POS]
+    jb   .zero
+    cmp  r13, rax
+    cmova r13, rax
+    test r13, r13
+    jz   .zero
+    mov  ecx, [rbx + P_CH]
+    lea  r8, [rcx * 2]
+    mov  rsi, [rbx + P_POS]
+    imul rsi, r8
+    add  rsi, [rbx + P_DATA]
+    mov  rdi, r12
+    mov  rcx, r13
+    mov  r10d, r14d
+    xor  r9d, r9d
+    cmp  dword [rbx + P_CH], 1
+    je   .w1
+    mov  r9d, 2
+.w1:call m16_32
+    add  [rbx + P_POS], r13
+    mov  rax, r13
+    RET_
+.cod:
+    mov  rax, [rbx + P_CODEC]
+    cmp  qword [rax + C_READ32], 0
+    je   .c16
+    cmp  dword [rbx + P_CH], 2
+    jne  .c32
+    mov  A1, rbx                      ; stereo: the codec writes straight into out
+    mov  A2, r12
+    mov  A3, r13
+    call [rax + C_READ32]
+    cmp  rax, r13
+    cmova rax, r13
+    mov  r15, rax
+    mov  rsi, r12
+    mov  rdi, r12
+    mov  rcx, r15
+    mov  r10d, r14d
+    mov  r8d, 8
+    mov  r9d, 4
+    call m32_32
+    add  [rbx + P_POS], r15
+    mov  rax, r15
+    RET_
+.c32:                                 ; mono / 3+ channels through the scratch area
+    xor  r15d, r15d
+.c3l:test r13, r13
+    jz   .cdone
+    mov  rax, r13
+    mov  ecx, HR_CHUNK
+    cmp  rax, rcx
+    cmova rax, rcx
+    mov  [rsp + LOC_C], rax
+    mov  A1, rbx
+    lea  A2, [rsp + LOC_SCR]
+    mov  A3, rax
+    mov  rax, [rbx + P_CODEC]
+    call [rax + C_READ32]
+    test rax, rax
+    jz   .cdone
+    mov  rcx, [rsp + LOC_C]
+    cmp  rax, rcx
+    cmova rax, rcx
+    mov  [rsp + LOC_C], rax
+    lea  rsi, [rsp + LOC_SCR]
+    mov  rdi, r12
+    mov  rcx, rax
+    mov  r10d, r14d
+    mov  r8d, [rbx + P_CH]
+    shl  r8, 2
+    mov  r9d, 4
+    cmp  dword [rbx + P_CH], 1
+    jne  .c3m
+    xor  r9d, r9d
+.c3m:call m32_32
+    mov  rax, [rsp + LOC_C]
+    lea  r12, [r12 + rax * 8]
+    add  r15, rax
+    sub  r13, rax
+    jmp  .c3l
+.c16:                                 ; a codec without read32: widen its 16-bit output
+    xor  r15d, r15d
+.c1l:test r13, r13
+    jz   .cdone
+    mov  rax, r13
+    mov  ecx, SCR
+    cmp  rax, rcx
+    cmova rax, rcx
+    mov  [rsp + LOC_C], rax
+    mov  A1, rbx
+    lea  A2, [rsp + LOC_SCR]
+    mov  A3, rax
+    mov  rax, [rbx + P_CODEC]
+    call [rax + C_READ]
+    test rax, rax
+    jz   .cdone
+    mov  rcx, [rsp + LOC_C]
+    cmp  rax, rcx
+    cmova rax, rcx
+    mov  [rsp + LOC_C], rax
+    lea  rsi, [rsp + LOC_SCR]
+    mov  rdi, r12
+    mov  rcx, rax
+    mov  r10d, r14d
+    mov  r8d, [rbx + P_CH]
+    add  r8, r8
+    xor  r9d, r9d
+    cmp  dword [rbx + P_CH], 1
+    je   .c1m
+    mov  r9d, 2
+.c1m:call m16_32
+    mov  rax, [rsp + LOC_C]
+    lea  r12, [r12 + rax * 8]
+    add  r15, rax
+    sub  r13, rax
+    jmp  .c1l
+.cdone:
     add  [rbx + P_POS], r15
     mov  rax, r15
     RET_

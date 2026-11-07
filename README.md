@@ -1,4 +1,4 @@
-# Peep 0.3.0
+# Peep 0.4.0
 
 A music player that is just a screen.
 
@@ -15,9 +15,9 @@ writes to disk.
 
 | Download | Platform |
 |---|---|
-| [`Peep-0.3.0-x86_64.AppImage`](releases/Peep-0.3.0-x86_64.AppImage) | Linux x86-64 |
-| [`peep_0.3.0_amd64.deb`](releases/peep_0.3.0_amd64.deb) | Ubuntu 22.04+ / Debian 12+ (x86-64) |
-| [`Peep-0.3.0.exe`](releases/Peep-0.3.0.exe) | Windows x64 |
+| [`Peep-0.4.0-x86_64.AppImage`](releases/Peep-0.4.0-x86_64.AppImage) | Linux x86-64 |
+| [`peep_0.4.0_amd64.deb`](releases/peep_0.4.0_amd64.deb) | Ubuntu 22.04+ / Debian 12+ (x86-64) |
+| [`Peep-0.4.0.exe`](releases/Peep-0.4.0.exe) | Windows x64 |
 
 ## Philosophy
 
@@ -126,8 +126,11 @@ src/core.asm    playlist, player thread, stereo mix + volume with a smooth
                 ramp, track info hand-off to the UI
 src/peep.asm    the decoder kernel: built-in 16-bit PCM WAV (every header
                 layout), channel mapping to stereo, codec dispatch
-src/flac.asm    native FLAC decoder: 4 to 24 bit, 1 to 8 channels, every
-                stereo mode, seeking without a seek table
+src/wav.asm     the other WAV formats: unsigned 8-bit, 12/16/20/24/32-bit PCM,
+                32/64-bit float, plain or extensible, 1 to 8 channels
+src/flac.asm    native FLAC decoder: 4 to 31 bit, 1 to 8 channels, every
+                stereo mode, every frame CRC-checked, seeking without a
+                seek table
 src/meta.asm    tag reader: ID3v2/v1, FLAC blocks, Ogg page reassembly,
                 Vorbis comments, base64 pictures, WAV LIST/INFO
 src/gfx.asm     cover scaling (box-filter halving + SSE2 bilinear), overlay,
@@ -141,16 +144,15 @@ tests/          the test suite: drives the real program (see tests/README.md)
 **About the C shim.** Peep's own code is all assembly. The shim connects it
 to well-tested public-domain single-file libraries:
 
-* `dr_mp3` and `dr_wav` (David Reid) and `stb_vorbis` decode MP3, Ogg Vorbis
-  and the WAV formats that are not 16-bit PCM (24-bit, float, 8-bit, ...).
-  FLAC and 16-bit PCM WAV are decoded by Peep's own assembly.
+* `dr_mp3` (David Reid) and `stb_vorbis` decode MP3 and Ogg Vorbis. WAV (every
+  PCM and float format) and FLAC are decoded by Peep's own assembly.
 * `stb_image` decodes cover pictures.
 * `stb_truetype` (Sean Barrett) rasterises font glyphs.
 
 Tag parsing, image scaling, text layout and blending stay in assembly.
-`make pure` builds a C-free Linux binary. It plays 16-bit PCM WAV and FLAC
-through Peep's own decoders and reads tags, but has no MP3, Ogg, cover art or
-custom fonts.
+`make pure` builds a C-free Linux binary. It plays WAV and FLAC through
+Peep's own decoders and reads tags, but has no MP3, Ogg, cover art or custom
+fonts.
 
 When nothing is changing, the UI thread sleeps until an event arrives. While
 the overlay is visible and music is playing, it wakes once a second, when the

@@ -2,6 +2,39 @@
 
 All notable changes to Peep.
 
+## 0.4.0
+
+### Changed
+- Peep's WAV and FLAC decoders are now the newest ones from the Liberated Peep
+  project (lib-Peep 0.5.0), built straight into Peep's own assembly. The player
+  calls them directly, with no wrapper layer in between.
+- **WAV in assembly at every common depth.** Unsigned 8-bit; signed 12, 16, 20,
+  24 and 32-bit PCM; 32-bit and 64-bit float; plain or extensible headers; one
+  to eight channels; odd chunks, unknown lengths and truncated files. The C
+  library `dr_wav` is removed.
+- **Sturdier FLAC.** Every frame's checksum is verified, so a damaged frame is
+  skipped cleanly instead of playing as noise. FLAC with 25 to 31 bits per
+  sample now plays (0.3.0 stopped at 24), and ID3 tags placed in front of a
+  FLAC stream are skipped.
+- Smaller: the Linux program is 189 KB (218 KB in 0.3.0, 279 KB in 0.2.15) and
+  the Windows `.exe` 219 KB (301 KB in 0.2.15).
+- `make pure`, the build with no C at all, now plays every WAV format as well
+  as FLAC.
+- Verified: 20 test files played through the old and the new build, with the
+  audio output compared byte for byte. 17 are identical, including 8-bit,
+  24-bit and 32-bit PCM and both float formats. The other three are the
+  removals below. The decoders also pass lib-Peep's own suites against Peep's
+  exact objects, now part of `make test`: 2,505 16-bit WAV checks, the new
+  WAV-format model, 120 random FLAC streams with seeks, 300 damaged streams,
+  1,153 high-resolution output checks, and a 100,000-input fuzz run.
+
+### Removed
+- A-law, µ-law and ADPCM WAV files, and WAV files with more than eight
+  channels, no longer play. The C library that handled them is gone. They are
+  rare; ordinary PCM and float WAV are unaffected.
+- FLAC with 32 bits per sample does not play. (The old C decoder, removed in
+  0.3.0, accepted it; the native one stops at 31. Practically no FLAC is 32-bit.)
+
 ## 0.3.0
 
 ### Changed

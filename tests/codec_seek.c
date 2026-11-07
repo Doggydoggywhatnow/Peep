@@ -4,7 +4,7 @@
  * Decodes a whole file, then seeks to several positions and checks that the
  * samples read there are bit-for-bit the ones from the straight decode.
  *
- *   codec_seek kernel FILE   FLAC and WAV, through the assembly kernel (dec.o, flac.o)
+ *   codec_seek kernel FILE   FLAC and every WAV format, through the assembly kernel (dec.o, flac.o, wav.o)
  *   codec_seek shim FILE     MP3 and Ogg, through the C shim (codecs.o)
  *
  * Prints "exact=N/7 frames=F" and exits 0 only if every seek was exact.
@@ -60,7 +60,7 @@ static size_t k_rd(void *h, short *o, size_t n) { return peep_fill(h, o, n); }
 static void k_sk(void *h, unsigned long long f) { peep_seek(h, f); }
 static int run_kernel(const unsigned char *d, long n)
 {
-    static const peep_codec *const codecs[] = {&peep_codec_flac, 0};
+    static const peep_codec *const codecs[] = {&peep_codec_wavx, &peep_codec_flac, 0};
     peep p;
     void *work = NULL;
     if (!peep_open(&p, codecs, d, n, NULL, 0)) {

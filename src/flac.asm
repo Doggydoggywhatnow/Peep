@@ -1,11 +1,15 @@
 ; Liberated Peep FLAC codec: a native assembly FLAC decoder behind the peep_codec interface.
 ;
 ;   * freestanding: no libc, no malloc, no syscalls, no writable globals
+;   * ID3v2 tags in front of the stream are skipped; damaged frames are counted in p->errors;
+;     read32() gives the samples at full resolution; peep_flac_metadata() hands out metadata blocks
 ;   * workspace lent by the host: channels * max_blocksize * 4 + 16 bytes (16 of them in front of the first plane)
-;   * 4..24 bits per sample, 1..8 channels, fixed and variable block sizes,
+;   * 4..31 bits per sample, 1..8 channels, fixed and variable block sizes,
 ;     constant/verbatim/fixed/LPC subframes, every Rice mode, all stereo modes
 ;   * seeking by binary search over frame headers (CRC-8 checked), no seek table needed
 ;   * damaged data is skipped: the decoder resynchronises on the next valid frame header
+;   * every frame's CRC-16 is verified; a frame that fails it is output as silence of the right
+;     length (so timing and seek positions stay correct) instead of as wrong samples
 ;
 ; Register convention inside this file (private; the exported entry points are
 ; ordinary C-ABI functions that set it up):
@@ -17,15 +21,23 @@
 default rel
 %include "abi.inc"
 
+global peep_flac_metadata
+
+
 ; struct peep
+P_CODEC  equ 0
 P_SRC    equ 8
 P_LEN    equ 16
 P_TOTAL  equ 32
 P_RATE   equ 40
 P_CH     equ 44
+P_KIND   equ 52
+P_CTX    equ 64
 P_WORK   equ 128
 P_WSIZE  equ 136
 P_WNEED  equ 144
+P_ERRS   equ 152                  ; u32 damaged frames met so far
+P_BITS   equ 158                  ; u16 bits per sample of the source
 
 ; FLAC state inside peep.state[] (offsets from the start of struct peep)
 S_NEXT   equ 72                   ; u64 offset of the next frame
@@ -73,6 +85,8 @@ L_HI     equ 400
 L_TGT    equ 408
 L_MID    equ 416
 L_FIX    equ 424                  ; order of a fixed predictor, 0 for LPC
+L_CRC    equ 432                  ; the CRC-16 stored in the frame
+L_WIDE   equ 440                  ; 0: read() int16, 1: read32() int32
 
 section .text
 
@@ -181,6 +195,95 @@ crc8:
     jmp  .l
 .d: movzx eax, al
     ret
+
+; ---- CRC-16 (FLAC: polynomial 0x8005, start 0, MSB first, no reflection) ---------------------
+; Table k holds, for every byte value, the CRC of that byte followed by k zero bytes. NASM builds
+; the eight tables itself at assembly time (no generator script), 8 x 512 bytes.
+%macro CRC16TAB 1
+%assign i 0
+%assign nbits 8 * (%1 + 1)
+%rep 256
+%assign c i << 8
+%rep nbits
+%if c & 0x8000
+%assign c ((c << 1) ^ 0x8005) & 0xFFFF
+%else
+%assign c (c << 1) & 0xFFFF
+%endif
+%endrep
+    dw   c
+%assign i i + 1
+%endrep
+%endmacro
+
+    align 16
+crc16_tab:
+%assign k 0
+%rep 8
+    CRC16TAB k
+%assign k k + 1
+%endrep
+
+; crc16: rsi = bytes, rcx = count -> eax. 8 bytes per step (slicing-by-8): the CRC only mixes
+; into the first two bytes, so the other six table lookups do not wait for it.
+; Clobbers rcx, rdx, rsi, r8-r11.
+crc16:
+    xor  eax, eax
+    lea  r8, [crc16_tab]
+    cmp  rcx, 8
+    jb   .t
+.l8:mov  rdx, [rsi]
+    mov  r9d, eax
+    shr  r9d, 8
+    xor  r9d, edx
+    movzx r9d, r9b                    ; (crc >> 8) ^ b0
+    movzx r10d, al
+    mov  r11d, edx
+    shr  r11d, 8
+    xor  r10d, r11d
+    movzx r10d, r10b                  ; (crc & 255) ^ b1
+    movzx eax, word [r8 + 7 * 512 + r9 * 2]
+    xor  ax, [r8 + 6 * 512 + r10 * 2]
+    mov  r9, rdx
+    shr  r9, 16
+    movzx r9d, r9b
+    xor  ax, [r8 + 5 * 512 + r9 * 2]
+    mov  r9, rdx
+    shr  r9, 24
+    movzx r9d, r9b
+    xor  ax, [r8 + 4 * 512 + r9 * 2]
+    mov  r9, rdx
+    shr  r9, 32
+    movzx r9d, r9b
+    xor  ax, [r8 + 3 * 512 + r9 * 2]
+    mov  r9, rdx
+    shr  r9, 40
+    movzx r9d, r9b
+    xor  ax, [r8 + 2 * 512 + r9 * 2]
+    mov  r9, rdx
+    shr  r9, 48
+    movzx r9d, r9b
+    xor  ax, [r8 + 1 * 512 + r9 * 2]
+    shr  rdx, 56
+    xor  ax, [r8 + rdx * 2]
+    add  rsi, 8
+    sub  rcx, 8
+    cmp  rcx, 8
+    jae  .l8
+.t: test rcx, rcx
+    jz   .d
+.t1:movzx edx, byte [rsi]
+    mov  r9d, eax
+    shr  r9d, 8
+    xor  r9d, edx
+    movzx r9d, r9b
+    shl  eax, 8
+    movzx eax, ax
+    xor  ax, [r8 + r9 * 2]
+    inc  rsi
+    dec  rcx
+    jnz  .t1
+.d: ret
 
 ; ============================================================================
 ; Frame header: leaves block size, channel assignment, bits per sample and the
@@ -931,6 +1034,20 @@ stereo_fix:
     jnz  .s1
     ret
 
+; silence_block: zero every channel's block (a frame whose CRC-16 did not match)
+silence_block:
+    mov  rdx, [rbx + S_PLANE0]
+    mov  r8d, [rbx + P_CH]
+.s: mov  rdi, rdx
+    mov  ecx, LOC(L_BS)
+    xor  eax, eax
+    rep  stosd
+    mov  eax, [rbx + S_MAXBLK]
+    lea  rdx, [rdx + rax * 4]
+    dec  r8d
+    jnz  .s
+    ret
+
 ; ============================================================================
 ; Body of a frame whose header was just parsed. eax = 1 ok, 0 error.
 ; ============================================================================
@@ -979,6 +1096,7 @@ decode_body:
     call br_get
     mov  ecx, 16
     call br_get
+    mov  LOC(L_CRC), eax              ; the CRC-16 stored in the frame
     CHECK_OVERRUN .fail
     mov  rax, r12
     sub  rax, [rbx + P_SRC]
@@ -986,6 +1104,19 @@ decode_body:
     sub  rax, r14
     shr  rax, 3
     mov  [rbx + S_NEXT], rax
+    mov  rsi, [rbx + P_SRC]           ; CRC-16 over the whole frame, header to the last audio byte
+    add  rsi, LOC(L_HSTART)
+    lea  rcx, [rax - 2]
+    sub  rcx, LOC(L_HSTART)
+    call crc16
+    cmp  eax, LOC(L_CRC)
+    je   .crcok
+    call silence_block                ; damaged: silence of the right length, not wrong samples
+    inc  dword [rbx + P_ERRS]
+    mov  rax, LOC(L_HSTART)           ; the length it claimed cannot be trusted either: look for the
+    inc  rax                          ; next valid frame header from just after this one's first byte
+    mov  [rbx + S_NEXT], rax
+.crcok:
     call stereo_fix
     mov  eax, LOC(L_BS)
     mov  [rbx + S_BLKLEN], eax
@@ -1023,7 +1154,10 @@ decode_next:
 .body:
     call decode_body
     test eax, eax
-    jz   .resync
+    jnz  .okret
+    inc  dword [rbx + P_ERRS]         ; a frame that could not be decoded
+    jmp  .resync
+.okret:
     ret
 .eof:
     mov  rax, [rbx + P_LEN]
@@ -1040,6 +1174,46 @@ decode_next:
 ; int open(peep *p, const void *data, size_t len)
 FUNCL flac_open, FLOC
     ARGS rbx, r12, r13
+    xor  r14d, r14d                   ; bytes of ID3v2 tag(s) in front of the stream
+.id3:
+    cmp  r13, 10 + 42
+    jb   .noid3
+    mov  eax, [r12]
+    and  eax, 0xFFFFFF
+    cmp  eax, 0x334449                ; 'ID3'
+    jne  .noid3
+    mov  eax, [r12 + 6]               ; four 7-bit size bytes
+    test eax, 0x80808080
+    jnz  .noid3
+    bswap eax
+    mov  edx, eax
+    and  edx, 0x7F
+    mov  ecx, eax
+    shr  ecx, 8
+    and  ecx, 0x7F
+    shl  ecx, 7
+    or   edx, ecx
+    mov  ecx, eax
+    shr  ecx, 16
+    and  ecx, 0x7F
+    shl  ecx, 14
+    or   edx, ecx
+    shr  eax, 24
+    shl  eax, 21
+    or   edx, eax                     ; tag size
+    add  rdx, 10
+    test byte [r12 + 5], 0x10         ; footer present
+    jz   .nofoot
+    add  rdx, 10
+.nofoot:
+    lea  rax, [rdx + 42]
+    cmp  rax, r13
+    ja   .noid3
+    add  r12, rdx
+    sub  r13, rdx
+    add  r14, rdx
+    jmp  .id3
+.noid3:
     cmp  r13, 42
     jb   .fail
     cmp  dword [r12], 'fLaC'
@@ -1079,9 +1253,10 @@ FUNCL flac_open, FLOC
     inc  ecx
     cmp  ecx, 4
     jb   .fail
-    cmp  ecx, 24
+    cmp  ecx, 31
     ja   .fail
     mov  [rbx + S_SIBPS], ecx
+    mov  [rbx + P_BITS], cx           ; the source's bit depth, for the caller
     mov  rcx, 0xFFFFFFFFF
     and  rax, rcx
     mov  [rbx + P_TOTAL], rax
@@ -1108,8 +1283,11 @@ FUNCL flac_open, FLOC
     je   .fail
     cmp  [rbx + P_WSIZE], rax
     jb   .fail
+    add  rsi, r14                     ; offsets are from the start of the file, ID3 included
     mov  [rbx + S_NEXT], rsi
     mov  [rbx + S_START], rsi
+    lea  rax, [r14 + 4]
+    mov  [rbx + P_CTX], rax           ; where the metadata blocks start (for peep_flac_metadata)
     mov  rax, [rbx + P_WORK]
     add  rax, 16
     mov  [rbx + S_PLANE0], rax
@@ -1122,6 +1300,14 @@ FUNCL flac_open, FLOC
 ; size_t read(peep *p, int16_t *out, size_t frames)
 FUNCL flac_read, FLOC
     ARGS rbx, rax, rcx
+    mov  dword LOC(L_WIDE), 0
+    jmp  flac_rd
+
+; size_t read32(peep *p, int32_t *out, size_t frames): every sample left-justified (<< 32 - bits)
+FUNCL flac_read32, FLOC
+    ARGS rbx, rax, rcx
+    mov  dword LOC(L_WIDE), 1
+flac_rd:
     mov  LOC(L_OUT), rax
     mov  LOC(L_FRAMES), rcx
     mov  qword LOC(L_GOT), 0
@@ -1139,7 +1325,12 @@ FUNCL flac_read, FLOC
     mov  rax, LOC(L_FRAMES)
     cmp  rcx, rax
     cmova rcx, rax
+    cmp  dword LOC(L_WIDE), 0
+    jne  .w32
     call interleave
+    jmp  .loop
+.w32:
+    call interleave32
     jmp  .loop
 .done:
     mov  rax, LOC(L_GOT)
@@ -1246,6 +1437,91 @@ interleave:
     add  LOC(L_OUT), rax
     ret
 
+; interleave32: ecx = frames to hand out from the decoded block, to L_OUT as int32, each
+; sample left-justified: value << (32 - bps).
+interleave32:
+    mov  r8d, ecx
+    mov  r10d, [rbx + P_CH]
+    mov  eax, 32
+    sub  eax, [rbx + S_BPS]
+    mov  LOC(L_LS), eax
+    movd xmm4, eax
+    cmp  r10d, 2
+    jne  .gen
+    mov  r9d, [rbx + S_BLKPOS]
+    mov  rsi, [rbx + S_PLANE0]
+    mov  eax, [rbx + S_MAXBLK]
+    lea  rdi, [rsi + rax * 4]
+    lea  rsi, [rsi + r9 * 4]
+    lea  rdi, [rdi + r9 * 4]
+    mov  rdx, LOC(L_OUT)
+    mov  ecx, r8d
+    shr  ecx, 2
+    jz   .tail
+.v: movdqu xmm0, [rsi]
+    movdqu xmm1, [rdi]
+    pslld xmm0, xmm4
+    pslld xmm1, xmm4
+    movdqa xmm2, xmm0
+    punpckldq xmm0, xmm1              ; L0 R0 L1 R1
+    punpckhdq xmm2, xmm1              ; L2 R2 L3 R3
+    movdqu [rdx], xmm0
+    movdqu [rdx + 16], xmm2
+    add  rsi, 16
+    add  rdi, 16
+    add  rdx, 32
+    dec  ecx
+    jnz  .v
+.tail:
+    mov  r9d, r8d
+    and  r9d, 3
+    jz   .done
+.t1:mov  eax, [rsi]
+    mov  ecx, LOC(L_LS)
+    shl  eax, cl
+    mov  [rdx], eax
+    mov  eax, [rdi]
+    shl  eax, cl
+    mov  [rdx + 4], eax
+    add  rsi, 4
+    add  rdi, 4
+    add  rdx, 8
+    dec  r9d
+    jnz  .t1
+    jmp  .done
+.gen:
+    xor  r11d, r11d
+    lea  rdi, [r10 * 4]
+.gc:mov  eax, [rbx + S_MAXBLK]
+    imul rax, r11
+    mov  ecx, [rbx + S_BLKPOS]
+    add  rax, rcx
+    mov  rsi, [rbx + S_PLANE0]
+    lea  rsi, [rsi + rax * 4]
+    mov  rdx, LOC(L_OUT)
+    lea  rdx, [rdx + r11 * 4]
+    mov  r9d, r8d
+.gl:mov  eax, [rsi]
+    mov  ecx, LOC(L_LS)
+    shl  eax, cl
+    mov  [rdx], eax
+    add  rsi, 4
+    add  rdx, rdi
+    dec  r9d
+    jnz  .gl
+    inc  r11d
+    cmp  r11d, r10d
+    jb   .gc
+.done:
+    mov  eax, r8d
+    add  [rbx + S_BLKPOS], eax
+    sub  LOC(L_FRAMES), rax
+    add  LOC(L_GOT), rax
+    imul rax, r10
+    shl  rax, 2
+    add  LOC(L_OUT), rax
+    ret
+
 ; void seek(peep *p, uint64_t frame)
 FUNCL flac_seek, FLOC
     ARGS rbx, r12
@@ -1296,6 +1572,70 @@ FUNCL flac_seek, FLOC
     mov  [rbx + S_BLKPOS], eax
 .r: RET_
 
+; size_t peep_flac_metadata(peep *p, int type, int index, const void **data)
+; Zero-copy access to the index-th metadata block of the given type (0 STREAMINFO, 1 PADDING, 2 APPLICATION,
+; 3 SEEKTABLE, 4 VORBIS_COMMENT, 5 CUESHEET, 6 PICTURE) of a file opened through peep_codec_flac.
+; Returns the block's length and stores its address in *data (data may be NULL), or returns (size_t)-1
+; when there is no such block or p is not a FLAC file. The address is inside the memory you gave peep_open.
+FUNC peep_flac_metadata, 0
+    ARGS rbx, r12, r13, r14
+    cmp  dword [rbx + P_KIND], 2
+    jne  .no
+    call peep_flac
+    cmp  rax, [rbx + P_CODEC]
+    jne  .no
+    mov  rsi, [rbx + P_CTX]           ; offset of the first block header
+    mov  r8, [rbx + P_SRC]
+    mov  r9, [rbx + P_LEN]
+.blk:
+    lea  rax, [rsi + 4]
+    cmp  rax, r9
+    ja   .no
+    mov  eax, [r8 + rsi]
+    bswap eax
+    mov  ecx, eax
+    and  eax, 0xFFFFFF                ; length
+    shr  ecx, 24                      ; last-flag | type
+    lea  rdx, [rsi + 4]               ; body
+    lea  r10, [rdx + rax]             ; end of body
+    cmp  r10, r9
+    ja   .no
+    mov  r11d, ecx
+    and  r11d, 0x7F
+    cmp  r11d, r12d
+    jne  .next
+    test r13d, r13d
+    jz   .hit
+    dec  r13d
+.next:
+    test cl, 0x80
+    jnz  .no
+    mov  rsi, r10
+    jmp  .blk
+.hit:
+    test r14, r14
+    jz   .hz
+    lea  rcx, [r8 + rdx]
+    mov  [r14], rcx
+.hz:RET_
+.no:
+    mov  rax, -1
+    RET_
+
+; const peep_codec *peep_flac(void): the codec table's address, for languages whose FFI can import
+; functions but not data symbols. (Position independent, so it also works in a shared library.)
+%ifdef WIN64
+global peep_flac
+peep_flac:
+    lea  rax, [rel peep_codec_flac]
+    ret
+%else
+global peep_flac:function
+peep_flac:
+    mov  rax, [rel peep_codec_flac wrt ..got]
+    ret
+%endif
+
 ; ============================================================================
 %ifdef WIN64
 section .rdata align=8
@@ -1303,7 +1643,7 @@ section .rdata align=8
 section .data.rel.ro progbits alloc noexec write align=8
 %endif
 global peep_codec_flac
-peep_codec_flac: dq flac_open, flac_read, flac_seek, 0
+peep_codec_flac: dq flac_open, flac_read, flac_seek, 0, flac_read32
 
 %ifndef WIN64
 section .note.GNU-stack noalloc noexec nowrite progbits

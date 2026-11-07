@@ -53,7 +53,7 @@ for ch in (1, 2, 3, 6, 8):
 good = rng.randint(-1000, 1000, 100).astype('<i2').tobytes()
 for name, data in (('data before fmt', riff(chunk(b'data', good), fmt())), ('zero channels', riff(fmt(0), chunk(b'data', good))),
                    ('rate 0', riff(fmt(rate=0), chunk(b'data', good))), ('9 channels', riff(fmt(9), chunk(b'data', good))),
-                   ('8-bit', riff(fmt(bits=8), chunk(b'data', good))), ('float', riff(fmt(tag=3, bits=32), chunk(b'data', good))),
+                   ('adpcm', riff(fmt(tag=2, bits=4), chunk(b'data', good))),
                    ('huge chunk', riff(fmt(), b'LIST' + struct.pack('<I', 0xFFFFFFF0) + b'xx')), ('tiny', b'RIFF\x04\0\0\0WAVE'),
                    ('garbage', b'hello this is not audio' * 50), ('empty fmt', riff(b'fmt ' + struct.pack('<I', 0), chunk(b'data', good)))):
     rc, out = run(data); check('reject ' + name, rc != 0 and out == b'')

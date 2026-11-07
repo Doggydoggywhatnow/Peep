@@ -26,10 +26,10 @@ static unsigned char *guarded(size_t n, int end, void **base, size_t *tot)
 int main(int argc, char **argv)
 {
     long iters = atol(argv[1]); int nseed = argc - 2;
-    static unsigned char seed[8][1 << 17]; size_t sl[8];
-    if (nseed > 8) nseed = 8;
+    static unsigned char seed[16][1 << 17]; size_t sl[16];
+    if (nseed > 16) nseed = 16;
     for (int i = 0; i < nseed; i++) { FILE *f = fopen(argv[2 + i], "rb"); sl[i] = fread(seed[i], 1, sizeof seed[i], f); fclose(f); }
-    static const peep_codec *const codecs[] = { &peep_codec_flac, 0 };
+    static const peep_codec *const codecs[] = { &peep_codec_wavx, &peep_codec_flac, 0 };
     static int16_t out[4096 * 8 * 2];
     long opened = 0, played = 0; unsigned long long frames_out = 0;
     signal(SIGALRM, hang); if (getenv("FUZZSEED")) s ^= strtoull(getenv("FUZZSEED"), 0, 10) * 0x9E3779B97F4A7C15ull;
@@ -60,10 +60,12 @@ int main(int argc, char **argv)
             ok = peep_open(&p, codecs, b, n, work, ws);
         }
         if (ok) {
-            opened++; peep_set_gain(&p, rnd() % 300);
+            opened++; peep_set_gain(&p, rnd() % 300); peep_set_dither(&p, rnd() % 4);
+            { const void *d = 0; size_t len = peep_flac_metadata(&p, rnd() % 9, rnd() % 3, &d);
+              if (len != (size_t)-1 && d && len) { volatile unsigned char t = ((const unsigned char *)d)[0]; t += ((const unsigned char *)d)[len - 1]; (void)t; } }
             for (int k = 0; k < 8; k++) {
                 if (rnd() % 3 == 0) peep_seek(&p, ((unsigned long long)rnd() << (rnd() % 24)) % (p.total + 7));
-                size_t want = 1 + rnd() % 4096, got = peep_fill(&p, out, want);
+                size_t want = 1 + rnd() % 4096, got = (rnd() & 1) ? peep_fill32(&p, (int32_t *)out, want) : peep_fill(&p, out, want);
                 if (got > want) { printf("peep_fill returned %zu > %zu\n", got, want); return 1; }
                 frames_out += got; if (got) played++;
             }

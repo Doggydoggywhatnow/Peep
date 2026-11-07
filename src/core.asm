@@ -32,7 +32,7 @@ extern plat_join            ; (handle)
 ; ---- C runtime ------------------------------------------------------------
 extern malloc, calloc, free, realloc, memcpy, qsort
 ; the decoder kernel (src/peep.asm, src/flac.asm; API in src/peep.h)
-extern peep_open, peep_fill, peep_seek, peep_close, peep_codec_flac
+extern peep_open, peep_fill, peep_seek, peep_close, peep_codec_flac, peep_codec_wavx
 %ifndef PURE
 extern codec_open, codec_read, codec_seek, codec_close   ; the C shim (src/codecs.c)
 %endif
@@ -73,10 +73,12 @@ job_hash      dq 0
 
 ; gain = 256 * (step/20)^2  — roughly perceptual
 voltab: dw 0,1,3,6,10,16,23,31,41,52,64,77,92,108,125,144,164,185,207,231,256
-; Codecs tried after the kernel's built-in 16-bit PCM WAV, in order: native
-; FLAC, then (unless PURE) the C shim for MP3, Ogg Vorbis and the other WAV formats.
+; Codecs tried after the kernel's built-in 16-bit PCM WAV, in order: the other
+; WAV formats (8/12/20/24/32-bit PCM, 32/64-bit float), native FLAC, then
+; (unless PURE) the C shim for MP3 and Ogg Vorbis.
 align 8
-codec_list:   dq peep_codec_flac
+codec_list:   dq peep_codec_wavx
+              dq peep_codec_flac
 %ifndef PURE
               dq peep_codec_shim
 %endif
@@ -269,24 +271,6 @@ FUNC dec_open, 0
     mov  eax, 1
     RET_
 
-; dec_read(out, frames) -> rax frames of stereo
-FUNC dec_read, 0
-    mov  rdx, A2                      ; frames
-    mov  rsi, A1                      ; out
-    lea  A1, [g_peep]
-    mov  A2, rsi
-    mov  A3, rdx
-    call peep_fill
-    RET_
-
-; dec_seek(frame): the kernel clamps to the end
-FUNC dec_seek, 0
-    mov  rsi, A1
-    lea  A1, [g_peep]
-    mov  A2, rsi
-    call peep_seek
-    RET_
-
 FUNC dec_close, 0
     lea  A1, [g_peep]
     call peep_close
@@ -298,9 +282,8 @@ FUNC dec_close, 0
 .n: RET_
 
 %ifndef PURE
-; ---- the C shim as the kernel's last codec: MP3, Ogg Vorbis and the WAV formats
-; the built-in decoder doesn't do (not 16-bit PCM). Its decoder object (dec_t)
-; lives in the kernel's state[] bytes.
+; ---- the C shim as the kernel's last codec: MP3 and Ogg Vorbis. Its decoder
+; object (dec_t) lives in the kernel's state[] bytes.
 FUNCL sh_open, 0                      ; (p, data, len) -> nonzero = mine
     ARGS rbx, r12, r13
     lea  A1, [rbx + PEEP_STATE]
@@ -340,7 +323,7 @@ FUNCL sh_close, 0                     ; (p)
 
 section .data
 align 8
-peep_codec_shim: dq sh_open, sh_read, sh_seek, sh_close
+peep_codec_shim: dq sh_open, sh_read, sh_seek, sh_close, 0   ; no read32: 16-bit only
 section .text
 %endif
 
@@ -529,8 +512,9 @@ FUNC play_track, 0
     jbe  .doskip
     inc  ebx
     jnz  .doskip
-    xor  A1, A1
-    call dec_seek
+    lea  A1, [g_peep]
+    xor  A2d, A2d
+    call peep_seek
     mov  qword [st_pos], 0
     call plat_audio_flush
     call plat_wake                    ; show the new time now
@@ -580,8 +564,9 @@ FUNC play_track, 0
     jmp  .flushout
 .sk3:
     mov  rbx, rax
-    mov  A1, rbx
-    call dec_seek
+    lea  A1, [g_peep]
+    mov  A2, rbx
+    call peep_seek
     mov  [st_pos], rbx
     mov  eax, [seek_taken]
     lock sub [cmd_seek], eax          ; st_pos has it now
@@ -607,8 +592,9 @@ FUNC play_track, 0
     xor  ebx, ebx
 .v1:
     call plat_audio_flush
-    mov  A1, rbx
-    call dec_seek
+    lea  A1, [g_peep]
+    mov  A2, rbx
+    call peep_seek
     mov  [st_pos], rbx
 .novol:
     cmp  dword [g_paused], 0
@@ -629,8 +615,9 @@ FUNC play_track, 0
     xor  ebx, ebx
 .p1:
     call plat_audio_flush
-    mov  A1, rbx
-    call dec_seek
+    lea  A1, [g_peep]
+    mov  A2, rbx
+    call peep_seek
     mov  [st_pos], rbx
     call plat_wake                    ; the clock shows the heard position
 .sleep:
@@ -639,9 +626,10 @@ FUNC play_track, 0
     jmp  .loop
 .play:
     mov  dword [pause_done], 0
-    lea  A1, [decbuf]
-    mov  A2, CHUNK
-    call dec_read
+    lea  A1, [g_peep]
+    lea  A2, [decbuf]
+    mov  A3, CHUNK
+    call peep_fill
     test rax, rax
     jz   .ended
     mov  rbx, rax
