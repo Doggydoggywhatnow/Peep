@@ -70,7 +70,7 @@ MUSLCC ?= musl-gcc
 M := $(B)/musl
 SYMS_X11 := XChangeProperty XConnectionNumber XConvertSelection XCreateBitmapFromData XCreateImage XCreatePixmapCursor XCreateSimpleWindow XDefaultDepth XDefaultGC XDefaultScreen XDefaultVisual XDefineCursor XDisplayHeight XDisplayWidth XFlush XFree XGetWindowProperty XInternAtoms XLookupKeysym XMapWindow XNextEvent XOpenDisplay XPending XPutImage XResizeWindow XRootWindow XSelectInput XSendEvent XSetClassHint XSetWMNormalHints XSetWMProtocols XSetWindowBackgroundPixmap XStoreName XUndefineCursor XUngrabPointer
 SYMS_XEXT := XSyncCreateCounter XSyncInitialize XSyncQueryExtension XSyncSetCounter
-SYMS_ASOUND := snd_pcm_avail_update snd_pcm_close snd_pcm_delay snd_pcm_drain snd_pcm_drop snd_pcm_open snd_pcm_prepare snd_pcm_recover snd_pcm_set_params snd_pcm_wait snd_pcm_writei
+SYMS_ASOUND := snd_pcm_avail_update snd_pcm_close snd_pcm_delay snd_pcm_drain snd_pcm_drop snd_pcm_open snd_pcm_prepare snd_pcm_recover snd_pcm_set_params snd_pcm_state snd_pcm_wait snd_pcm_writei
 $(M):
 	mkdir -p $(M)
 $(M)/libX11.so.6: | $(M)

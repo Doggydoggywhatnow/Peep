@@ -26,7 +26,7 @@ extern XUngrabPointer
 extern XSyncQueryExtension, XSyncInitialize, XSyncCreateCounter, XSyncSetCounter
 extern snd_pcm_open, snd_pcm_set_params, snd_pcm_writei, snd_pcm_recover
 extern snd_pcm_drop, snd_pcm_prepare, snd_pcm_drain, snd_pcm_close, snd_pcm_delay
-extern snd_pcm_avail_update, snd_pcm_wait
+extern snd_pcm_avail_update, snd_pcm_wait, snd_pcm_state
 extern malloc, free, open, close, lseek, mmap, munmap, opendir, readdir
 extern closedir, strlen, strcasecmp, usleep, pthread_create, pthread_join, poll, write, _exit
 %ifdef MUSL
@@ -1579,7 +1579,11 @@ FUNC plat_audio_wait, 0
     cmp  rax, CHUNK
     jge  .yes
     mov  A1, [pcm]
-    mov  A2d, 2
+    call snd_pcm_state
+    cmp  eax, 3                        ; RUNNING? A stream that is not playing yet
+    jne  .yes                          ; (just prepared) only starts inside the write,
+    mov  A1, [pcm]                     ; once the buffer is full: waiting here would
+    mov  A2d, 2                        ; wait forever and make no sound
     call snd_pcm_wait
     xor  eax, eax
     jmp  .r
