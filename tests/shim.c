@@ -12,8 +12,10 @@
  *                   "DROP <ms> <frames dropped> <stream length after>".
  *   - SIM_OPEN_MS: how long opening the device takes (default 0).
  *
- * It also logs a checksum of every frame Peep uploads to the X server:
- *   - LATLOG file: "<ms> <checksum>" per XPutImage.
+ * It also logs every frame Peep uploads to the X server, and when it hides or
+ * shows the pointer:
+ *   - LATLOG file: "<ms> <checksum> <width>x<height>" per XPutImage, and
+ *                  "CUR <ms> hide" / "CUR <ms> show" per XDefineCursor / XUndefineCursor.
  *
  * Times are CLOCK_MONOTONIC milliseconds, the same clock drive.c uses.
  */
@@ -145,23 +147,44 @@ int snd_pcm_prepare(snd_pcm_t *p) { return 0; }
 int snd_pcm_recover(snd_pcm_t *p, int e, int s) { return 0; }
 int snd_pcm_close(snd_pcm_t *p) { return 0; }
 
-/* ---- frame checksums ----------------------------------------------------- */
-int XPutImage(Display *d, Drawable w, GC g, XImage *i, int a, int b, int c, int e,
-              unsigned W, unsigned H)
+/* ---- frame checksums and pointer visibility -------------------------------------- */
+static int lat_fd(void)
 {
-    static int (*real)(Display *, Drawable, GC, XImage *, int, int, int, int, unsigned, unsigned);
     static int fd = -2;
-    if (!real) real = dlsym(RTLD_NEXT, "XPutImage");
     if (fd == -2) {
         const char *l = getenv("LATLOG");
         fd = l ? open(l, O_CREAT | O_WRONLY | O_APPEND, 0644) : -1;
     }
+    return fd;
+}
+int XDefineCursor(Display *d, Window w, Cursor c)
+{
+    static int (*real)(Display *, Window, Cursor);
+    char s[48];
+    if (!real) real = dlsym(RTLD_NEXT, "XDefineCursor");
+    put(lat_fd(), s, snprintf(s, sizeof s, "CUR %.3f hide\n", now()));
+    return real(d, w, c);
+}
+int XUndefineCursor(Display *d, Window w)
+{
+    static int (*real)(Display *, Window);
+    char s[48];
+    if (!real) real = dlsym(RTLD_NEXT, "XUndefineCursor");
+    put(lat_fd(), s, snprintf(s, sizeof s, "CUR %.3f show\n", now()));
+    return real(d, w);
+}
+int XPutImage(Display *d, Drawable w, GC g, XImage *i, int a, int b, int c, int e,
+              unsigned W, unsigned H)
+{
+    static int (*real)(Display *, Drawable, GC, XImage *, int, int, int, int, unsigned, unsigned);
+    int fd = lat_fd();
+    if (!real) real = dlsym(RTLD_NEXT, "XPutImage");
     if (fd >= 0) {
         unsigned long h = 1469598103;
         unsigned *p = (unsigned *)i->data;
         for (unsigned k = 0; k < W * H; k++) h = (h ^ p[k]) * 1099511628211UL;
-        char s[64];
-        put(fd, s, snprintf(s, sizeof s, "%.3f %lx\n", now(), h));
+        char s[80];
+        put(fd, s, snprintf(s, sizeof s, "%.3f %lx %ux%u\n", now(), h, W, H));
     }
     return real(d, w, g, i, a, b, c, e, W, H);
 }

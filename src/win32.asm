@@ -11,6 +11,7 @@ extern core_list_new, core_list_add, core_list_free, core_publish
 extern core_player, core_key, core_render, g_quit, g_ui
 extern core_take_info, core_target_size, core_note_size, core_art_aspect
 extern core_next_wake, core_click, core_hover, core_tick_needed
+extern core_set_fullscreen, core_motion, core_cursor_hidden
 
 extern GetModuleHandleW, LoadIconW, LoadCursorW, GetStockObject, RegisterClassExW
 extern CreateWindowExW, ShowWindow, GetMessageW, TranslateMessage, DispatchMessageW
@@ -84,6 +85,9 @@ bmi         resb 44
 fullscreen  resd 1
 hidden      resd 1                 ; not shown yet: waiting for the first cover
 tracking    resd 1                 ; TrackMouseEvent armed: the pointer is over us
+cur_hidden  resd 1                 ; the pointer is hidden right now (fullscreen idle)
+mm_flag     resd 1                 ; a redraw is wanted after this mouse move
+last_mouse  resd 1                 ; position of the last mouse move
 tme         resb 24                ; TRACKMOUSEEVENT
 cur_pt      resq 1                 ; POINT
 alignb 8
@@ -347,9 +351,16 @@ FUNC wndproc, 80                       ; PAINTSTRUCT (72)
     xor  A4, A4
     call SendMessageW
     jmp  .zero
-.mmove:                                ; pointer over the window: controls on
+.mmove:                                ; the pointer moved over the window
+    mov  dword [mm_flag], 0
+    cmp  r14d, [last_mouse]            ; Windows also sends moves that aren't
+    je   .mm1                          ; one: only a new position counts
+    mov  [last_mouse], r14d
+    call core_motion                   ; fullscreen: the controls come back
+    mov  [mm_flag], eax
+.mm1:
     cmp  dword [tracking], 0
-    jne  .zero
+    jne  .mm2
     mov  dword [tracking], 1
     mov  dword [tme], 24               ; cbSize
     mov  dword [tme + 4], TME_LEAVE
@@ -358,12 +369,17 @@ FUNC wndproc, 80                       ; PAINTSTRUCT (72)
     lea  A1, [tme]
     call TrackMouseEvent
     mov  A1, 1
-    call core_hover
-    test eax, eax
-    jnz  .inval
+    call core_hover                    ; windowed: controls on
+    or   [mm_flag], eax
+.mm2:
+    call win_update_cursor             ; fullscreen: the pointer shows again
+    cmp  dword [mm_flag], 0
+    jne  .inval
     jmp  .zero
 .mleave:                               ; pointer gone: controls fade out
     mov  dword [tracking], 0
+    cmp  dword [fullscreen], 0
+    jne  .zero                         ; fullscreen: always under the pointer
     xor  A1, A1
     call core_hover
     test eax, eax
@@ -426,6 +442,7 @@ FUNC wndproc, 80                       ; PAINTSTRUCT (72)
     lea  A2, [L(0)]
     call EndPaint
 .rearm:
+    call win_update_cursor             ; fullscreen: maybe it is time to hide the pointer
     call core_next_wake                ; next redraw: clock tick, notice expiry
     test eax, eax
     js   .notimer
@@ -445,8 +462,10 @@ FUNC wndproc, 80                       ; PAINTSTRUCT (72)
     je   .def
     cmp  r14w, 1                       ; HTCLIENT
     jne  .def
+    cmp  dword [cur_hidden], 0
+    je   .def                          ; fullscreen, pointer moving: the normal arrow
     xor  A1, A1
-    call SetCursor                     ; no pointer over a fullscreen Peep
+    call SetCursor                     ; pointer still: hidden, with the controls
     jmp  .one
 .drop:
     call core_list_new
@@ -630,6 +649,9 @@ FUNC toggle_fullscreen, 0
     mov  qword SARG(7), 0x220          ; NOOWNERZORDER | FRAMECHANGED
     call SetWindowPos
     mov  dword [fullscreen], 1
+    mov  A1d, 1
+    call core_set_fullscreen           ; the pointer stays usable and just moved
+    call win_update_cursor
     RET_
 .leave:
     mov  A1, [hwnd]
@@ -649,7 +671,40 @@ FUNC toggle_fullscreen, 0
     mov  qword SARG(7), 0x227          ; NOMOVE|NOSIZE|NOZORDER|NOOWNERZORDER|FRAMECHANGED
     call SetWindowPos
     mov  dword [fullscreen], 0
+    xor  A1d, A1d
+    call core_set_fullscreen
+    mov  dword [tracking], 0
+    lea  A1, [cur_pt]                  ; is the pointer still over the window?
+    call GetCursorPos
+    mov  A1, [cur_pt]
+    call WindowFromPoint
+    xor  ecx, ecx
+    cmp  rax, [hwnd]
+    sete cl
+    mov  A1d, ecx
+    call core_hover
+    call win_update_cursor
     RET_
+
+; win_update_cursor(): hide or show the pointer as core_cursor_hidden says; the
+; same moment the controls finish fading out (fullscreen, pointer still).
+FUNC win_update_cursor, 0
+    call core_cursor_hidden
+    cmp  eax, [cur_hidden]
+    je   .r
+    mov  [cur_hidden], eax
+    test eax, eax
+    jz   .show
+    xor  A1, A1
+    call SetCursor
+    RET_
+.show:
+    xor  A1, A1
+    mov  A2, 32512                     ; IDC_ARROW
+    call LoadCursorW
+    mov  A1, rax
+    call SetCursor
+.r: RET_
 
 ; ============================================================================
 ; add_path(list, wpath, depth): file -> add; folder -> recurse (audio only)

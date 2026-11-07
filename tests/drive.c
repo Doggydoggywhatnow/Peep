@@ -12,6 +12,9 @@
  *   drive burst SEQ OUT.ppm    key burst (R, L, . = pause), then a screenshot
  *   drive pause plain|seek     pause/resume (optionally seeking while paused)
  *   drive tick                 how often the screen is redrawn
+ *   drive volhold              hold the volume keys down (key repeat)
+ *   drive tracks               next/previous timing and behaviour
+ *   drive fullscreen           enter/leave fullscreen, pointer idle and moving
  *   drive version              press V, watch the notice appear and expire
  *   drive quit PID MODE        time from Q to exit, MODE = playing|paused|...
  *   drive idle SECONDS         wait, then quit
@@ -83,8 +86,22 @@ static int viewable(void)
 }
 /* When we are the window manager (hover), map and resize requests are ours to
  * grant, as a real window manager would. */
+static int fs_on, fs_saved[4];
 static void wm_event(XEvent *e)
 {
+    if (e->type == ClientMessage && e->xclient.message_type == XInternAtom(d, "_NET_WM_STATE", 0)) {
+        /* a window asking to be made (or no longer be) fullscreen: do what a window manager does */
+        int act = e->xclient.data.l[0], want = act == 2 ? !fs_on : act == 1;
+        Window ww = e->xclient.window;
+        if (want && !fs_on) {
+            XWindowAttributes a;
+            XGetWindowAttributes(d, ww, &a);
+            fs_saved[0] = a.x; fs_saved[1] = a.y; fs_saved[2] = a.width; fs_saved[3] = a.height;
+            XMoveResizeWindow(d, ww, 0, 0, DisplayWidth(d, 0), DisplayHeight(d, 0));
+        } else if (!want && fs_on)
+            XMoveResizeWindow(d, ww, fs_saved[0], fs_saved[1], fs_saved[2], fs_saved[3]);
+        fs_on = want;
+    }
     if (e->type == MapRequest) XMapWindow(d, e->xmaprequest.window);
     else if (e->type == ConfigureRequest) {
         XConfigureRequestEvent *c = &e->xconfigurerequest;
@@ -264,6 +281,12 @@ static void cmd_hover(void)
     find_window();
     wait_viewable(1);
     ms(1500);
+    if (getenv("WIN_SIZE")) { /* measure at another window size */
+        int n = atoi(getenv("WIN_SIZE"));
+        XResizeWindow(d, w, n, n);
+        XSync(d, 0);
+        ms(800);
+    }
     int W, H;
     unsigned char *bare = grab(&W, &H);
     int n = W * H * 3;
@@ -276,6 +299,15 @@ static void cmd_hover(void)
     unsigned char *on = grab(&W, &H);
     double full = diff(on, bare, n);
     printf("inside_diff=%.2f\n", full);
+    {   /* how much of the window the controls cover: the rows that differ from the bare cover */
+        int first = H;
+        for (int y = 0; y < H && first == H; y++) {
+            double d = 0;
+            for (int x = 0; x < W * 3; x++) d += abs(on[y * W * 3 + x] - bare[y * W * 3 + x]);
+            if (d / (W * 3) > 1.5) first = y;
+        }
+        printf("controls_height_pct=%.1f\nwindow=%dx%d\n", 100.0 * (H - first) / H, W, H);
+    }
     outside();
     int t[] = {100, 250, 400, 700}, el = 0;
     for (int i = 0; i < 4; i++) {
@@ -291,7 +323,13 @@ static void cmd_hover(void)
     ms(200);
     printf("art_click_moves=%d\n", count_moves());
     unsigned char *b4 = grab(&W, &H);
-    click(W / 2, H * 3 / 4); /* on the play/pause button */
+    {   /* the play/pause button: centred, directly above the progress bar (same layout as gfx.asm) */
+        int u = (W < H ? W : H) >> 5;
+        if (u < 6) u = 6;
+        u = u * 19 / 20;
+        int pad = u * 3 / 2, bh = u / 5 < 2 ? 2 : u / 5;
+        click(W / 2, H - pad - bh - u / 2 - u);
+    }
     ms(300);
     printf("button_click_moves=%d\n", count_moves());
     printf("button_changed_frame=%d\n", diff(b4, grab(&W, &H), n) > 0.01);
@@ -380,6 +418,76 @@ static void cmd_tick(void)
     key(XK_f);
     sleep(7);
     mark("LATLOG", "MARK", "END");
+    key(XK_q);
+}
+
+/* ---- volhold: volume keys held down at the keyboard repeat rate --------------- */
+static void cmd_volhold(void)
+{
+    need_window();
+    ms(1500);
+    mark("PROGLOG", "MARK", "HOLD");
+    for (int i = 0; i < 45; i++) { key(XK_Down); ms(33); }
+    for (int i = 0; i < 45; i++) { key(XK_Up); ms(33); }
+    mark("PROGLOG", "MARK", "RELEASED");
+    ms(600);
+    key(XK_q);
+}
+
+/* ---- fullscreen -------------------------------------------------------------------- */
+static void pump(int msec) /* wait, but keep acting as the window manager */
+{
+    double end = now() + msec;
+    while (now() < end) {
+        while (XPending(d)) { XEvent e; XNextEvent(d, &e); wm_event(&e); }
+        usleep(1500);
+    }
+}
+static void cmd_fullscreen(void)
+{
+    open_display();
+    XSelectInput(d, R, SubstructureRedirectMask); /* we are the window manager */
+    outside();
+    find_window();
+    wait_viewable(1);
+    pump(1500);
+    int W, H;
+    win_size(&W, &H);
+    key(XK_Tab);
+    warp(W / 2, H / 2);
+    pump(600);
+    mark("LATLOG", "MARK", "WINDOWED");
+    for (int i = 0; i < 6; i++) { warp(W / 2 + 10 * i, H / 2 + 5 * i); pump(60); } /* moves while windowed */
+    mark("LATLOG", "MARK", "ENTER");
+    key(XK_F11);
+    pump(1300);
+    mark("LATLOG", "MARK", "MOVE1");
+    warp(DisplayWidth(d, 0) / 2, DisplayHeight(d, 0) / 2);
+    pump(3600);                                    /* the pointer rests: controls fade, pointer hides */
+    mark("LATLOG", "MARK", "MOVE2");
+    warp(DisplayWidth(d, 0) / 2 + 40, DisplayHeight(d, 0) / 2 + 20);
+    pump(700);
+    mark("LATLOG", "MARK", "EXIT");
+    key(XK_F11);
+    pump(1300);
+    mark("LATLOG", "MARK", "END");
+    key(XK_q);
+}
+
+/* ---- tracks: next / previous --------------------------------------------------- */
+static void mark2(const char *name) { mark("LATLOG", "MARK", name); mark("PROGLOG", "MARK", name); }
+static void cmd_tracks(void)
+{
+    need_window();
+    ms(1500);
+    mark2("NEXT");  key(XK_n); ms(700);                        /* next */
+    mark2("PREV");  key(XK_p); ms(700);                        /* previous (under 3 s in) */
+    mark2("RAPID");                                            /* five quick presses */
+    for (int i = 0; i < 5; i++) { key(XK_n); ms(25); }
+    mark2("RAPID_END");
+    ms(800);
+    mark2("LAST");  key(XK_n); ms(900);                        /* next on the last track */
+    mark2("END");
     key(XK_q);
 }
 
@@ -480,6 +588,9 @@ int main(int argc, char **argv)
     else if (!strcmp(c, "pause") && argc > 2) cmd_pause(argv[2]);
     else if (!strcmp(c, "tick")) cmd_tick();
     else if (!strcmp(c, "version")) cmd_version();
+    else if (!strcmp(c, "volhold")) cmd_volhold();
+    else if (!strcmp(c, "tracks")) cmd_tracks();
+    else if (!strcmp(c, "fullscreen")) cmd_fullscreen();
     else if (!strcmp(c, "quit") && argc > 3) cmd_quit(atoi(argv[2]), argv[3]);
     else if (!strcmp(c, "idle") && argc > 2) cmd_idle(atoi(argv[2]));
     else if (!strcmp(c, "which")) cmd_which();

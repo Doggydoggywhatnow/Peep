@@ -1,4 +1,4 @@
-# Peep 0.2.12
+# Peep 0.2.13
 
 A music player that is just a screen.
 
@@ -15,9 +15,9 @@ writes to disk.
 
 | Download | Platform |
 |---|---|
-| [`Peep-0.2.12-x86_64.AppImage`](releases/Peep-0.2.12-x86_64.AppImage) | Linux x86-64 |
-| [`peep_0.2.12_amd64.deb`](releases/peep_0.2.12_amd64.deb) | Ubuntu 22.04+ / Debian 12+ (x86-64) |
-| [`Peep-0.2.12.exe`](releases/Peep-0.2.12.exe) | Windows x64 |
+| [`Peep-0.2.13-x86_64.AppImage`](releases/Peep-0.2.13-x86_64.AppImage) | Linux x86-64 |
+| [`peep_0.2.13_amd64.deb`](releases/peep_0.2.13_amd64.deb) | Ubuntu 22.04+ / Debian 12+ (x86-64) |
+| [`Peep-0.2.13.exe`](releases/Peep-0.2.13.exe) | Windows x64 |
 
 ## Philosophy
 
@@ -71,15 +71,19 @@ ratings, recommendations. Peep is built around *listening* to it.
 | Space | pause / resume |
 | ← / → | seek −10 s / +10 s |
 | ↑ / ↓ | volume |
-| N or Page Down | next track |
+| N or Page Down | next track (on the last track it does nothing, and the music carries on) |
 | P or Page Up | previous track (restarts the current one if more than 3 s in) |
-| F11 | fullscreen (pointer hidden); Esc leaves it |
+| F11 | fullscreen; Esc leaves it. The pointer stays usable and hides, with the controls, once it stops moving |
 | Q | quit |
 
 With Tab on, the info and controls appear while the pointer is over the
 window and fade out half a second after it leaves. The **⏮ ⏯ ⏭** buttons
 are clickable. Click and drag anywhere else on the cover to move the window
 (not in fullscreen).
+
+In fullscreen the controls and the pointer follow the pointer: they show while it
+moves, and when it has been still for two seconds the controls fade out and the
+pointer hides with them. Move it and both come straight back.
 
 ### Custom fonts
 
@@ -94,6 +98,24 @@ so new fonts show up without restarting Peep. The top-left notice shows the
 selected font's name, drawn in that font. The built-in 8×8 bitmap font is
 **Default**. It covers ASCII only, so pick a TrueType font for accented or
 non-Latin titles.
+
+## Peep is opinionated
+
+Peep is a small number of decisions made for you, and it would rather do those
+well than offer a switch for everything. It will not grow:
+
+* **No settings window and no config file.** The keys are fixed, and nothing is
+  remembered between launches: Peep never writes to disk.
+* **No library, playlists, ratings or queue editing.** A folder is the library,
+  played in path order.
+* **No skins or layouts.** The cover is the interface and the window takes its
+  shape. The controls are one small row you only see when you reach for it.
+* **No network.** No streaming, no cover or lyric lookups, no scrobbling, no
+  update check.
+* **No equalizer, visualizer or effects.**
+
+If you want one of those, another player is the better choice. Peep's job is to
+play your files and then get out of the way.
 
 ## What's inside
 

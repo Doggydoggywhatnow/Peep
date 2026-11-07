@@ -263,6 +263,20 @@ def album_dir():
     return asset("album", make)
 
 
+def tracks_dir():
+    """Three 12 s tracks whose every frame is unique: which one is playing is certain."""
+    def make(p):
+        p.mkdir()
+        for i in range(3):
+            n = SR * 12
+            rnd = random.Random(100 + i)
+            inter = array.array("h", bytes(n * 4))
+            inter[0::2] = array.array("h", [rnd.randint(-20000, 20000) for _ in range(n)])
+            inter[1::2] = array.array("h", [rnd.randint(-20000, 20000) for _ in range(n)])
+            write_wav(p / ("t%d.wav" % i), inter.tobytes())
+    return asset("tracks3", make)
+
+
 def converted(ext, *codec):
     def make(p):
         need("ffmpeg")
@@ -277,6 +291,8 @@ def read_lat():
         p = line.split()
         if not p:
             continue
+        if p[0] == "CUR":
+            continue                  # pointer visibility: see read_cursor
         if p[0] == "KEY":
             keys.append(float(p[1]))
         elif p[0] == "MARK":
@@ -284,6 +300,23 @@ def read_lat():
         else:
             frames.append((float(p[0]), p[1]))
     return frames, keys, marks
+
+
+def read_cursor():
+    """[(ms, "hide" | "show")] for every time Peep hid or showed the pointer."""
+    return [(float(l.split()[1]), l.split()[2]) for l in (LOGS / "lat.log").read_text().splitlines()
+            if l.startswith("CUR ")]
+
+
+def read_sizes():
+    """[(ms, (width, height))] for every frame Peep uploaded."""
+    out = []
+    for l in (LOGS / "lat.log").read_text().splitlines():
+        p = l.split()
+        if len(p) == 3 and p[0][0].isdigit() and "x" in p[2]:
+            w, h = p[2].split("x")
+            out.append((float(p[0]), (int(w), int(h))))
+    return out
 
 
 def read_prog():
@@ -344,6 +377,9 @@ def hover_fade_drag():
     assert r["fade_250_pct"] < r["fade_100_pct"] and r["fade_400_pct"] < r["fade_250_pct"], \
         "fade is not monotonic"
     assert r["fade_700_pct"] == 0, "a ghost of the controls remains (%d%%)" % r["fade_700_pct"]
+    # 33.7% of the window before 0.2.13; the buttons now share the time row, about 30% shorter
+    assert 20.0 <= r["controls_height_pct"] <= 25.5, \
+        "the controls cover %.1f%% of the window (want about 23.6%%)" % r["controls_height_pct"]
     assert r["art_click_moves"] == 1, "a click on the art did not start a window drag"
     assert r["button_click_moves"] == 0, "a click on a button started a window drag"
     return "fade %d/%d/%d/%d%%" % (r["fade_100_pct"], r["fade_250_pct"], r["fade_400_pct"],
@@ -454,6 +490,132 @@ def clock_cadence():
         assert 3000 <= last <= 6800, "the font notice changed last at %.1f s" % (last / 1000)
         note = ", notice expired at %.1f s" % (last / 1000)
     return "%d redraws in 6 s, %d while paused%s" % (len(fr) if not fonts else 6, len(frp), note)
+
+
+@check
+def volume_hold():
+    """Holding a volume key down (key repeat) must not make the sound stutter."""
+    with peep([ramp_wav()]):
+        drive("volhold")
+    prog, marks, drops = read_prog()
+    t0, t1 = marks["HOLD"], marks["RELEASED"]
+    held = [d for d in drops if t0 <= d[0] <= t1]
+    worst = run = 0
+    for (ta, pa), (tb, pb) in zip(prog, prog[1:]):
+        if ta < t0 or tb > t1 + 300:
+            continue
+        if pb == pa and pa > 0:
+            run += tb - ta
+        else:
+            worst, run = max(worst, run), 0
+    assert 1 <= len(held) <= 2, \
+        "the audio queue was dropped %d times (a lone press should, a held key should not)" % len(held)
+    assert worst < 8, "the sound stalled for %.0f ms" % worst
+    # Smoothness: the file's left channel is known in every frame, so the gain actually applied can
+    # be estimated (least squares over 64 frames). It must glide; a step would show as a jump.
+    src, heard = wav_data(ramp_wav()), (LOGS / "heard.raw").read_bytes()
+    a_, b_ = progress_at(prog, t0), progress_at(prog, t1)
+    s16, h16 = array.array("h"), array.array("h")
+    s16.frombytes(src[: (b_ + 64) * 4]); h16.frombytes(heard[: (b_ + 64) * 4])
+    gains = []
+    for i in range(a_, b_, 64):
+        num = sum(h16[2 * k] * s16[2 * k] for k in range(i, i + 64))
+        den = sum(s16[2 * k] * s16[2 * k] for k in range(i, i + 64))
+        gains.append(256 * num / den if den else 0)
+    step = max(abs(x - y) for x, y in zip(gains, gains[1:]))
+    assert min(gains) < 5 and max(gains) > 250, "the volume did not sweep the whole range"
+    assert step < 3, "the gain jumped by %.1f/256 within 64 frames (it should glide)" % step
+    return "%d queue drops in 3 s of key repeat, no stall, gain moves <= %.1f/256 per 64 frames" % (
+        len(held), step)
+
+
+@check
+def track_keys():
+    """Next/previous are quick, land on the right track, and the ends of the list behave."""
+    need_pil()
+    # screen: a real cover decode per track
+    with peep([album_dir()]):
+        drive("tracks", timeout=60)
+    frames, _, m = read_lat()
+
+    def first_change(t0):
+        before = [h for t, h in frames if t < t0][-1]
+        return next((t - t0 for t, h in frames if t >= t0 and h != before), None)
+    nxt, prv = first_change(m["NEXT"]), first_change(m["PREV"])
+    assert nxt is not None and nxt < 80, "Next changed the screen after %s ms" % nxt
+    assert prv is not None and prv < 80, "Previous changed the screen after %s ms" % prv
+    settle = max(t for t, h in frames if m["RAPID"] <= t <= m["RAPID_END"] + 400) - m["RAPID_END"]
+    assert settle < 150, "after five quick Nexts the screen settled %.0f ms later" % settle
+    # audio: which track is heard, where
+    d = tracks_dir()
+    data = [wav_data(d / ("t%d.wav" % i)) for i in range(3)]
+    with peep([d]):
+        drive("tracks", timeout=60)
+    prog, marks, drops = read_prog()
+    heard = (LOGS / "heard.raw").read_bytes()
+
+    def landed(t0, t1):
+        """(track, frame) playback restarted at, for each queue drop in [t0, t1]."""
+        out = []
+        for t, q, after in drops:
+            if t0 <= t <= t1 and after * 4 + 16 <= len(heard):
+                probe = heard[after * 4: after * 4 + 16]
+                out.append(next(((i, data[i].find(probe) // 4) for i in range(3) if data[i].find(probe) >= 0), None))
+        return out
+    first = landed(marks["NEXT"], marks["PREV"] - 1)
+    assert first and first[-1] == (1, 0), "Next did not start track 2 from its beginning: %s" % first
+    back = landed(marks["PREV"], marks["RAPID"] - 1)
+    assert back and back[-1] == (0, 0), "Previous (under 3 s in) did not go back to track 1: %s" % back
+    rapid = landed(marks["RAPID"], marks["LAST"] - 1)
+    assert rapid and rapid[-1] == (2, 0), "five quick Nexts did not land on the last track: %s" % rapid
+    assert not landed(marks["LAST"], marks["END"]), "Next on the last track interrupted the music"
+    p0, p1 = progress_at(prog, marks["LAST"]), progress_at(prog, marks["END"])
+    assert (p1 - p0) / SR > 0.8, "the music stopped after Next on the last track"
+    return "next %.0f ms, previous %.0f ms, 5 quick Nexts settle in %.0f ms; last-track Next is a no-op" % (
+        nxt, prv, settle)
+
+
+@check
+def fullscreen_pointer():
+    """Fullscreen keeps the pointer usable; it hides with the controls once it stops moving."""
+    need_pil()
+    with peep([test_mp3()]):
+        drive("fullscreen", timeout=60)
+    frames, _, m = read_lat()
+    cur, sizes = read_cursor(), read_sizes()
+
+    def between(rows, a, b):
+        return [r_ for r_ in rows if m[a] <= r_[0] < m[b]]
+    windowed = [sz for t, sz in sizes if t < m["ENTER"]][-1]
+    assert not between(sizes, "WINDOWED", "ENTER"), "windowed Peep redrew for pointer movement"
+    # entering: quick, and never a frame at a size the window does not have
+    enter = [(t - m["ENTER"], sz) for t, sz in between(sizes, "ENTER", "MOVE1") if t - m["ENTER"] < 500]
+    assert enter and enter[0][0] < 80, "the first fullscreen frame took %s ms" % (enter[0][0] if enter else "-")
+    assert len(enter) <= 3, "%d frames drawn while entering fullscreen" % len(enter)
+    assert all(sz == (1600, 1200) for _, sz in enter), "frames at the wrong size while entering: %s" % enter
+    assert not between(cur, "ENTER", "MOVE1"), "the pointer was hidden right after entering fullscreen"
+    # still pointer: controls fade (0.5 s), then the pointer hides with them
+    hides = [t for t, a in between(cur, "MOVE1", "MOVE2") if a == "hide"]
+    assert len(hides) == 1, "the pointer was hidden %d times while resting" % len(hides)
+    rest = hides[0] - m["MOVE1"]
+    assert 2300 <= rest <= 2800, "the pointer hid %.0f ms after it stopped (want about 2500)" % rest
+    fade = between(frames, "MOVE1", "MOVE2")
+    assert len(fade) >= 15, "only %d frames in the fade-out" % len(fade)
+    assert abs(fade[-1][0] - hides[0]) < 80, "the controls finished fading %.0f ms from the pointer hiding" % (
+        fade[-1][0] - hides[0])
+    # moving again: pointer and controls back at once
+    shows = [t for t, a in between(cur, "MOVE2", "EXIT") if a == "show"]
+    assert shows and shows[0] - m["MOVE2"] < 30, "the pointer took %s ms to come back" % (
+        shows[0] - m["MOVE2"] if shows else "-")
+    back = next((t - m["MOVE2"] for t, h in frames if t >= m["MOVE2"]), None)
+    assert back is not None and back < 40, "the controls took %s ms to come back" % back
+    # leaving
+    leave = [(t - m["EXIT"], sz) for t, sz in between(sizes, "EXIT", "END") if t - m["EXIT"] < 500]
+    assert leave and leave[0][0] < 80 and len(leave) <= 3, "leaving fullscreen: %s" % leave
+    assert all(sz == windowed for _, sz in leave), "frames at the wrong size while leaving: %s" % leave
+    assert not [a for t, a in between(cur, "EXIT", "END") if a == "hide"], "the pointer was hidden after leaving"
+    return "pointer hid %.0f ms after resting, back in %.0f ms; %d fade frames; enter/leave %d/%d frames" % (
+        rest, shows[0] - m["MOVE2"], len(fade), len(enter), len(leave))
 
 
 @check

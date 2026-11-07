@@ -12,6 +12,7 @@ extern core_list_new, core_list_add, core_list_free, core_publish
 extern core_player, core_key, core_render, g_quit, g_ui
 extern core_take_info, core_target_size, core_note_size, core_art_aspect
 extern core_next_wake, core_click, core_hover, core_tick_needed
+extern core_set_fullscreen, core_motion, core_cursor_hidden
 
 extern XOpenDisplay, XDefaultScreen, XRootWindow, XCreateSimpleWindow
 extern XStoreName, XSetClassHint, XSelectInput, XInternAtoms, XSetWMProtocols
@@ -39,6 +40,8 @@ global plat_thread, plat_join
 ; X11 constants
 KeyPress        equ 2
 ButtonPress     equ 4
+MotionNotify    equ 6
+POINTER_MOTION  equ 1<<6
 EnterNotify     equ 7
 LeaveNotify     equ 8
 NotifyGrab      equ 1
@@ -135,6 +138,7 @@ sync_tmp    resd 2
 fullscreen  resd 1
 xdnd_src    resq 1
 blank_cur   resq 1
+cursor_hidden resd 1               ; the pointer is hidden right now
 pcm         resq 1
 tid         resq 1
 classhint   resq 2
@@ -415,7 +419,9 @@ FUNC main, 16
     mov  A2, 2
     movsxd A3, ebx
     call poll
-    test eax, eax
+    mov  ebx, eax                      ; poll's result
+    call update_cursor                 ; fullscreen: maybe it is time to hide the pointer
+    test ebx, ebx
     jnz  .woke
     call core_tick_needed              ; timer tick: redraw only if it shows
     mov  [dirty], eax                  ; something new
@@ -512,6 +518,8 @@ FUNC on_event, 0
     je   .key
     cmp  eax, ButtonPress
     je   .button
+    cmp  eax, MotionNotify
+    je   .motion
     cmp  eax, EnterNotify
     je   .enter
     cmp  eax, LeaveNotify
@@ -528,7 +536,14 @@ FUNC on_event, 0
 .expose:
     mov  dword [dirty], 1
     RET_
+.motion:                               ; selected only while fullscreen
+    call core_motion                   ; the controls come back, the pointer shows
+    or   [dirty], eax
+    call update_cursor
+    RET_
 .enter:
+    cmp  dword [fullscreen], 0         ; fullscreen: always under the pointer, and the
+    jne  .r                            ; crossings around the resize mean nothing
     mov  A1, 1
     call core_hover
     or   [dirty], eax
@@ -538,6 +553,8 @@ FUNC on_event, 0
     ; the matching EnterNotify arrives when the grab ends
     cmp  dword [ev + 80], NotifyGrab   ; XCrossingEvent.mode
     je   .r
+    cmp  dword [fullscreen], 0
+    jne  .r
     xor  A1, A1
     call core_hover
     or   [dirty], eax
@@ -838,11 +855,32 @@ FUNC toggle_fullscreen, 0
     mov  A4, SUBSTRUCT_MASK
     lea  A5, [sev]
     call XSendEvent
-    ; hide the pointer while fullscreen
+    ; fullscreen: the pointer stays usable. The controls and the pointer follow
+    ; its movement (core_motion), so watch for motion only while fullscreen.
+    mov  A1d, [fullscreen]
+    call core_set_fullscreen
     mov  A1, [dpy]
     mov  A2, [win]
+    mov  A3, EV_MASK
     cmp  dword [fullscreen], 0
-    je   .show
+    je   .sel
+    or   A3, POINTER_MOTION
+.sel:
+    call XSelectInput
+    call update_cursor                 ; leaving fullscreen shows it again
+    mov  A1, [dpy]
+    call XFlush
+    RET_
+
+; update_cursor(): hide or show the pointer as core_cursor_hidden says. It is
+; the same moment the controls finish fading out (fullscreen, pointer still).
+FUNC update_cursor, 0
+    call core_cursor_hidden
+    cmp  eax, [cursor_hidden]
+    je   .r
+    mov  [cursor_hidden], eax
+    test eax, eax
+    jz   .show
     call blank_cursor
     mov  A1, [dpy]
     mov  A2, [win]
@@ -850,10 +888,12 @@ FUNC toggle_fullscreen, 0
     call XDefineCursor
     jmp  .f
 .show:
+    mov  A1, [dpy]
+    mov  A2, [win]
     call XUndefineCursor
 .f: mov  A1, [dpy]
     call XFlush
-    RET_
+.r: RET_
 
 ; start_move(): hand a left-button drag to the window manager
 ; (_NET_WM_MOVERESIZE, _NET_WM_MOVERESIZE_MOVE), so the window follows the

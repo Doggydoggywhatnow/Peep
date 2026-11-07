@@ -2,6 +2,34 @@
 
 All notable changes to Peep.
 
+## 0.2.13
+
+### Fixed
+- Holding a volume key no longer makes the sound stutter. Each key repeat used
+  to drop the queued audio and decode it again (40 times in 3 seconds of
+  holding a key, measured); now only a lone press does that, and held presses
+  glide the volume smoothly instead of stepping it.
+- Next on the last track no longer silently stops the music; it does nothing
+  and the music carries on. Next and Previous skip past tracks you are passing
+  over without opening them, so holding the key moves through a long folder
+  quickly.
+
+### Changed
+- The on-screen controls are about 30% less tall (33.7% of the window before,
+  about 23% now). The buttons now sit centred directly above the progress bar,
+  sharing a row with the time on the left and the track number and volume on
+  the right. The title and artist are centred above them, so the whole thing is
+  balanced.
+- Fullscreen keeps the pointer usable. The pointer and the controls show while
+  the pointer moves; after two seconds without movement the controls fade out
+  (the same half-second fade as usual) and the pointer hides with them. Moving
+  it brings both back at once. Pointer movement costs nothing outside
+  fullscreen.
+- Entering and leaving fullscreen draw one or two frames, never one at the
+  wrong size, and the controls no longer flicker from the pointer crossing the
+  window edge during the change.
+- The README now says plainly that Peep is opinionated, and what it won't do.
+
 ## 0.2.12
 
 ### Added

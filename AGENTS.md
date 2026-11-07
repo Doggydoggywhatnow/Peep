@@ -17,12 +17,14 @@ Released under the Unlicense.
   code, no telemetry, nothing written to disk), never remove features without
   being told to, keep Linux and Windows both supported.
 * **Version bumps.** Any change to what ships (program, packages, README,
-  CHANGELOG, license) is a patch bump (0.2.12 -> 0.2.13). **Do not go to 1.0.0
+  CHANGELOG, license) is a patch bump (0.2.13 -> 0.2.14). **Do not go to 1.0.0
   unless the owner says so.** Contributor-only changes (this file, `tests/`)
   don't need one.
 * **Check before pushing** `main`: `git status`, `git log -3`,
   `git fetch origin main`. Never force-push or rewrite history without the
   owner's say-so.
+* **Peep is opinionated** (README, "Peep is opinionated"). Say no to settings,
+  skins, library or playlist features, network code and effects; propose, don't add.
 * **Be honest about what wasn't tested.** The Windows build cannot be run
   from Linux and has never been run by the agents that built it. Say so.
 * Keep the repo free of shell scripts (`res/AppRun` is a symlink on purpose)
@@ -90,7 +92,7 @@ sound card or window manager; see `tests/README.md`.
 ## Releasing
 
 1. Change the code and run `make test`. Fix failures; don't skip them.
-2. Bump the version everywhere it appears. `grep -rn "0.2.12\|0,2,12" .`:
+2. Bump the version everywhere it appears. `grep -rn "0.2.13\|0,2,13" .`:
    the README title and download table, `res/peep.rc` (**both** the numeric
    `FILEVERSION`/`PRODUCTVERSION` and the text `FileVersion`; the numeric
    ones were once forgotten), and `CHANGELOG.md`.
@@ -117,7 +119,7 @@ sound card or window manager; see `tests/README.md`.
 * Measure before optimizing and keep numbers in the CHANGELOG; the decoders
   were already negligible (about 0.05% of a core), so `-Os` stays.
 
-## Known limits (as of 0.2.12)
+## Known limits (as of 0.2.13)
 
 Written by the agent that built the first version. Check these against the
 code before relying on them.

@@ -26,6 +26,7 @@ extern font_glyph, font_glyph_free
 global core_render, core_click, core_take_info, core_target_size
 global core_note_size, core_art_aspect, core_next_wake, gfx_font_cycle
 global core_hover, core_tick_needed, gfx_show_version
+global core_set_fullscreen, core_motion, core_cursor_hidden
 
 ; colours (0x00RRGGBB)
 C_TITLE   equ 0x00F2F2F2
@@ -98,6 +99,8 @@ leave_ms    resq 1             ; when the pointer left
 ov_top      resd 1             ; first row the overlay drew on (fade from here)
 last_sec    resq 1             ; the clock reading in the last frame drawn
 drawn_a     resd 1             ; overlay opacity in the last frame (0: none drawn)
+fs_mode     resd 1             ; fullscreen: controls and pointer follow pointer activity
+act_ms      resq 1             ; when the pointer last moved
 GC_N        equ 512            ; glyph cache entries (direct mapped)
 GC_SZ       equ 32             ; cp, px, bitmap, w, h, xoff, yoff
 alignb 8
@@ -1136,7 +1139,11 @@ FUNC overlay, 64
     cmp  eax, 6
     jae  .u
     mov  eax, 6
-.u: mov  [L(0)], eax
+.u: imul eax, 19                      ; with the button row merged into the
+    xor  edx, edx                     ; time row the controls are about 30% shorter
+    mov  ecx, 20                      ; than before: unit = 0.95 * side / 32
+    div  ecx
+    mov  [L(0)], eax
     mov  r12d, eax                    ; u
     lea  eax, [r12d*3]
     shr  eax, 1
@@ -1147,7 +1154,10 @@ FUNC overlay, 64
     lea  eax, [r12d*5]
     shr  eax, 2
     mov  [L(12)], eax                 ; artist px
-    mov  [L(16)], r12d                ; small px
+    lea  eax, [r12d*3]
+    shr  eax, 2
+    mov  [L(16)], eax                 ; small px: 3u/4, so the time row text
+                                      ; fits beside the buttons at every size
     cmp  dword [st_count], 0
     jne  .player
     ; ---- nothing loaded yet
@@ -1184,17 +1194,25 @@ FUNC overlay, 64
     sub  ecx, [L(4)]
     sub  ecx, eax
     mov  [L(20)], ecx                 ; bar y
+    ; the buttons sit centred directly above the progress bar, and the time
+    ; and track text share their row on either side
+    lea  eax, [r12d*2]
+    mov  [L(40)], eax                 ; icon size
+    mov  edx, r12d
+    shr  edx, 1
+    sub  ecx, edx                     ; u/2 above the bar
+    sub  ecx, r12d                    ; and half the icon size up: the centre
+    mov  [L(44)], ecx                 ; icon centre y
     mov  A1d, [L(16)]
     call text_h
-    mov  ecx, [L(20)]
+    shr  eax, 1
+    mov  ecx, [L(44)]
     sub  ecx, eax
-    lea  eax, [r12d*2]
-    xor  edx, edx
-    mov  ebx, 3
-    div  ebx
-    sub  ecx, eax
-    mov  [L(28)], ecx                 ; time row y
-    mov  [L(32)], ecx                 ; artist y (if none: same as time)
+    mov  [L(28)], ecx                 ; time row y: centred on the buttons
+    mov  ecx, [L(44)]
+    sub  ecx, r12d
+    mov  [L(52)], ecx                 ; top of the button row
+    mov  [L(32)], ecx                 ; artist y (if none: the button row)
     mov  rbx, [cur_info]
     test rbx, rbx
     jz   .noart
@@ -1202,7 +1220,7 @@ FUNC overlay, 64
     je   .noart
     mov  A1d, [L(12)]
     call text_h
-    mov  ecx, [L(28)]
+    mov  ecx, [L(52)]
     sub  ecx, eax
     mov  eax, r12d
     shr  eax, 1
@@ -1217,16 +1235,7 @@ FUNC overlay, 64
     shr  eax, 1
     sub  ecx, eax
     mov  [L(36)], ecx                 ; title y
-    lea  eax, [r12d*2]
-    mov  [L(40)], eax                 ; icon size
-    mov  edx, ecx
-    lea  ecx, [r12d*3]
-    shr  ecx, 1
-    sub  edx, ecx
-    shr  eax, 1
-    sub  edx, eax
-    mov  [L(44)], edx                 ; icon centre y
-    sub  edx, eax
+    lea  edx, [rcx]
     lea  ecx, [r12d*2]
     sub  edx, ecx
     mov  [L(48)], edx                 ; gradient top
@@ -1364,7 +1373,11 @@ FUNC overlay, 64
     mov  A3d, r13d
     lea  A4, [tbuf]
     call text_fit
-    mov  A1d, [L(4)]
+    lea  A1, [tbuf]
+    mov  A2d, [L(8)]
+    mov  A3d, [L(4)]
+    call centre_x                      ; centred above the buttons
+    mov  A1d, eax
     mov  A2d, [L(36)]
     lea  A3, [tbuf]
     mov  A4d, [L(8)]
@@ -1377,7 +1390,11 @@ FUNC overlay, 64
     mov  A3d, r13d
     lea  A4, [tbuf]
     call text_fit
-    mov  A1d, [L(4)]
+    lea  A1, [tbuf]
+    mov  A2d, [L(12)]
+    mov  A3d, [L(4)]
+    call centre_x
+    mov  A1d, eax
     mov  A2d, [L(32)]
     lea  A3, [tbuf]
     mov  A4d, [L(12)]
@@ -1388,7 +1405,10 @@ FUNC overlay, 64
     mov  r13d, [rc_w]
     shr  r13d, 1                      ; cx
     mov  r14d, [L(40)]                ; size
-    lea  r15d, [r14d*2]               ; spacing
+    mov  r15d, r14d
+    shr  r15d, 1
+    add  r15d, r14d                   ; spacing 1.5 x size = 3u: the hit boxes
+                                      ; (3u wide) just touch, text keeps its room
     xor  A1, A1
     mov  A2d, r13d
     sub  A2d, r15d
@@ -1406,6 +1426,20 @@ FUNC overlay, 64
     mov  A4d, r14d
     call icon
     mov  dword [btn_ok], 1
+    RET_
+
+; centre_x(str, px, margin) -> eax: the x that centres the string in the window.
+; A string as wide as the margins allow stays flush with the left margin.
+FUNC centre_x, 0
+    mov  r12d, A3d                    ; margin
+    call text_width                   ; (str, px) are still in A1, A2
+    mov  ecx, [rc_w]
+    sub  ecx, eax
+    shr  ecx, 1
+    cmp  ecx, r12d
+    jge  .r
+    mov  ecx, r12d
+.r: mov  eax, ecx
     RET_
 
 ; dialog(): font notice, top-left
@@ -1820,6 +1854,50 @@ FUNC core_tick_needed, 0
     mov  eax, 1
 .r: RET_
 
+; core_set_fullscreen(on): entering or leaving fullscreen. The pointer is
+; then over the window by definition, and counts as just moved.
+FUNC core_set_fullscreen, 0
+    ARGS r12
+    mov  [fs_mode], r12d
+    call plat_ms
+    mov  [act_ms], rax
+    test r12d, r12d
+    jz   .r
+    mov  dword [hover], 1
+.r: RET_
+
+; core_motion() -> eax 1 if the controls must be redrawn: the pointer moved.
+; Only fullscreen cares: the controls come back at once, and the pointer shows.
+FUNC core_motion, 0
+    xor  ebx, ebx
+    cmp  dword [fs_mode], 0
+    je   .r
+    call ui_alpha                      ; how visible they were
+    cmp  dword [g_ui], 0
+    je   .t
+    cmp  dword [g_blank], 0
+    jne  .t
+    cmp  eax, 256
+    setb bl                            ; faded or fading: they come back now
+.t: call plat_ms
+    mov  [act_ms], rax
+    mov  dword [hover], 1
+.r: mov  eax, ebx
+    RET_
+
+; core_cursor_hidden() -> eax 1 if the pointer should be hidden: fullscreen,
+; and still long enough for the controls to have faded out (it goes with them).
+FUNC core_cursor_hidden, 0
+    xor  ebx, ebx
+    cmp  dword [fs_mode], 0
+    je   .r
+    call plat_ms
+    sub  rax, [act_ms]
+    cmp  rax, IDLE_MS + FADE_MS
+    setae bl
+.r: mov  eax, ebx
+    RET_
+
 ; core_hover(inside): the pointer entered (1) or left (0) the window.
 ; -> eax 1 if a redraw is needed
 FUNC core_hover, 0
@@ -1842,6 +1920,7 @@ FUNC core_hover, 0
 ; ui_alpha() -> eax overlay opacity 0..256: full while the pointer is over
 ; the window, then a FADE_MS fade-out after it leaves. 0 when Tab is off.
 FADE_MS equ 500
+IDLE_MS equ 2000                       ; fullscreen: pointer still this long, then fade
 FUNC ui_alpha, 0
     xor  ebx, ebx
     cmp  dword [g_ui], 0
@@ -1850,9 +1929,18 @@ FUNC ui_alpha, 0
     jne  .r
     mov  ebx, 256
     cmp  dword [hover], 0
-    jne  .r
+    jne  .held
     call plat_ms
-    sub  rax, [leave_ms]
+    sub  rax, [leave_ms]               ; windowed: time since the pointer left
+    jmp  .fade
+.held:
+    cmp  dword [fs_mode], 0
+    je   .r                            ; windowed: shown while the pointer is over us
+    call plat_ms
+    sub  rax, [act_ms]
+    sub  rax, IDLE_MS                  ; fullscreen: time since the pointer went still,
+    jle  .r                            ; after the hold
+.fade:
     xor  ebx, ebx
     cmp  rax, FADE_MS
     jae  .r
@@ -1945,15 +2033,41 @@ FUNC core_next_wake, 0
     jb   .s
     mov  ecx, 10000
 .s: mov  ebx, ecx
-.ui:call ui_alpha
+.ui:cmp  dword [fs_mode], 0
+    je   .ui2
+    call plat_ms                       ; fullscreen: wake when the pointer is due
+    mov  rcx, [act_ms]                 ; to hide, even if no controls are showing
+    add  rcx, IDLE_MS + FADE_MS + 1
+    sub  rcx, rax
+    jle  .ui2
+    cmp  ecx, ebx
+    jae  .ui2
+    mov  ebx, ecx
+.ui2:
+    call ui_alpha
     test eax, eax
     jz   .r
+    cmp  eax, 256
+    jb   .fade                         ; fading out, either way
     cmp  dword [hover], 0
-    jne  .clk
+    jne  .full
+.fade:
     cmp  ebx, 16                       ; fading: ~60 frames a second
     jbe  .r
     mov  ebx, 16
     jmp  .r
+.full:
+    cmp  dword [fs_mode], 0
+    je   .clk
+    call plat_ms                       ; fullscreen: wake when the pointer has been
+    mov  rcx, [act_ms]                 ; still long enough for the fade to start
+    add  rcx, IDLE_MS + 1
+    sub  rcx, rax
+    jg   .f1
+    mov  ecx, 1
+.f1:cmp  ecx, ebx
+    jae  .clk
+    mov  ebx, ecx
 .clk:
     ; The clock moves once a second: sleep until the next whole second,
     ; and not at all while paused or stopped.

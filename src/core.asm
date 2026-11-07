@@ -26,6 +26,7 @@ extern plat_sleep           ; (ms)
 extern plat_title           ; (path, out, max)  ASCII display name
 extern plat_cmp             ; qsort comparator for native path strings
 extern plat_wake            ; () nudge the UI thread
+extern plat_ms              ; () -> rax monotonic milliseconds
 extern plat_thread          ; (fn) -> rax handle | 0
 extern plat_join            ; (handle)
 ; ---- C runtime ------------------------------------------------------------
@@ -59,6 +60,8 @@ cmd_seek      dd 0          ; seconds to seek (+/-), accumulated; the UI shows
                             ; st_pos + this, so keys register at once
 seek_taken    dd 0          ; the part of cmd_seek being carried out
 pause_done    dd 0          ; the queued audio was dropped for this pause
+mix_gain      dd -1         ; gain at the end of the last chunk (-1: none yet)
+vol_ms        dq 0          ; when a volume key was last pressed
 cmd_refill    dd 0          ; volume changed: re-render the queued audio
 art_thr       dq 0          ; cover-decoding thread, 0 when none
 job_info      dq 0          ; its track info
@@ -348,6 +351,7 @@ FUNC dec_close, 0
 
 ; open_track() -> eax 1 ok. Uses cur_list/cur_idx.
 FUNC open_track, 16
+    mov  dword [mix_gain], -1         ; a new track starts at its own gain
     mov  rax, [cur_list]
     mov  ecx, [cur_idx]
     mov  rax, [rax + PL_ITEMS]
@@ -373,6 +377,25 @@ FUNC open_track, 16
     jb   .close
     cmp  eax, 768000
     ja   .close
+    ; Another skip is already queued and will move on from this track (not
+    ; the no-op of Next on the last track): don't publish its info or decode
+    ; its cover, and leave the sound device alone.
+    mov  eax, [cmd_skip]
+    test eax, eax
+    jz   .pub
+    js   .pass
+    mov  rcx, [cur_list]
+    mov  rcx, [rcx + PL_COUNT]
+    dec  ecx
+    cmp  [cur_idx], ecx
+    jae  .pub
+.pass:
+    mov  eax, [g_dec + DEC_RATE]
+    mov  [st_rate], eax
+    mov  qword [st_pos], 0
+    mov  eax, 1
+    RET_
+.pub:
     mov  A1, rbx
     call publish_info                 ; tags now; the cover decodes alongside
     mov  eax, [g_dec + DEC_RATE]
@@ -432,8 +455,15 @@ FUNC mix, 0
     lea  r14, [r13*2]                 ; source stride in bytes
     xor  r15d, r15d                   ; offset of right channel
     cmp  r13d, 2
-    jb   .l
+    jb   .g
     mov  r15d, 2
+.g: mov  eax, [mix_gain]              ; where the last chunk ended
+    cmp  eax, -1
+    jne  .h
+    mov  eax, r12d
+.h: mov  [mix_gain], r12d
+    cmp  eax, r12d
+    jne  .ramp
 .l: test rbx, rbx
     jz   .d
     movsx eax, word [rsi]
@@ -448,6 +478,35 @@ FUNC mix, 0
     add  rdi, 4
     dec  rbx
     jmp  .l
+.ramp:                                ; the gain moved: glide to it over this chunk
+    test rbx, rbx
+    jz   .d
+    mov  r8d, eax
+    shl  r8, 16                       ; gain in 16.16, starting at the old one
+    mov  ecx, r12d
+    sub  ecx, eax
+    movsxd rax, ecx
+    shl  rax, 16
+    cqo
+    idiv rbx
+    mov  r9, rax                      ; per-frame step
+.rl:test rbx, rbx
+    jz   .d
+    mov  r10, r8
+    sar  r10, 16
+    movsx eax, word [rsi]
+    imul eax, r10d
+    sar  eax, 8
+    mov  [rdi], ax
+    movsx eax, word [rsi + r15]
+    imul eax, r10d
+    sar  eax, 8
+    mov  [rdi + 2], ax
+    add  r8, r9
+    add  rsi, r14
+    add  rdi, 4
+    dec  rbx
+    jmp  .rl
 .d: RET_
 
 ; play_track(): returns when the track ends or is interrupted
@@ -480,9 +539,21 @@ FUNC play_track, 0
 .doskip:
     mov  eax, [cur_idx]
     add  eax, ebx
-    jns  .sk1
-    xor  eax, eax
-.sk1:
+    jns  .dk1
+    xor  eax, eax                     ; before the first track: restart it
+.dk1:
+    mov  rcx, [cur_list]
+    mov  rcx, [rcx + PL_COUNT]
+    dec  ecx                          ; index of the last track
+    cmp  eax, ecx
+    jle  .dk2
+    mov  eax, ecx                     ; past the last track: stay on it
+.dk2:
+    cmp  eax, [cur_idx]
+    jne  .dk3
+    test ebx, ebx
+    jg   .loop                        ; Next on the last track: nothing to do,
+.dk3:                                 ; and the music carries on
     mov  [cur_idx], eax
     mov  dword [g_paused], 0
     jmp  .flushout
@@ -823,6 +894,22 @@ FUNC core_player, 0
     mov  eax, [cur_idx]
     cmp  rax, [rbx + PL_COUNT]
     jae  .atend
+    ; skips pressed while no track is open (key repeat): move the index now,
+    ; so only the track we land on is opened
+    xor  ecx, ecx
+    xchg ecx, [cmd_skip]
+    test ecx, ecx
+    jz   .noq
+    add  eax, ecx
+    jns  .q1
+    xor  eax, eax
+.q1:mov  rcx, [rbx + PL_COUNT]
+    dec  ecx
+    cmp  eax, ecx
+    jle  .q2
+    mov  eax, ecx
+.q2:mov  [cur_idx], eax
+.noq:
     call open_track
     test eax, eax
     jz   .bad
@@ -863,6 +950,20 @@ FUNC core_player, 0
 ; ============================================================================
 ; Input
 ; ============================================================================
+; vol_touched(): a volume key was pressed. A lone press is heard at once (the
+; player drops the queued audio and re-mixes it). A key being held repeats
+; every ~30 ms, and doing that each time would stutter the sound: while it is
+; held only new audio gets the new gain, which the mixer ramps smoothly.
+FUNC vol_touched, 0
+    call plat_ms
+    mov  rcx, rax
+    sub  rax, [vol_ms]
+    mov  [vol_ms], rcx
+    cmp  rax, 400
+    jb   .r
+    mov  dword [cmd_refill], 1
+.r: RET_
+
 ; core_key(k) -> eax 1 if the screen should be redrawn
 FUNC core_key, 0
     mov  eax, A1d
@@ -883,14 +984,14 @@ FUNC core_key, 0
     cmp  dword [g_volstep], 20
     jae  .yes
     inc  dword [g_volstep]
-    mov  dword [cmd_refill], 1
+    call vol_touched
     jmp  .yes
 .k5:cmp  eax, K_VOLDN
     jne  .k6
     cmp  dword [g_volstep], 0
     je   .yes
     dec  dword [g_volstep]
-    mov  dword [cmd_refill], 1
+    call vol_touched
     jmp  .yes
 .k6:cmp  eax, K_NEXT
     jne  .k7
