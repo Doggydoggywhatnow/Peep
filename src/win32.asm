@@ -521,12 +521,12 @@ FUNC wndproc, 80                       ; PAINTSTRUCT (72)
     je   .kprev
     cmp  eax, 0x09                     ; Tab (Shift+Tab: blank)
     je   .ktab
-    cmp  eax, 'F'
-    je   .kfont
+    cmp  eax, 'G'
+    je   .kfont                        ; G: next font
     cmp  eax, 'V'
     je   .kver
-    cmp  eax, 0x7A                     ; F11
-    je   .kfs
+    cmp  eax, 'F'
+    je   .kfs                          ; F: fullscreen
     cmp  eax, 0x1B                     ; Esc leaves fullscreen
     je   .kesc
     cmp  eax, 'Q'

@@ -617,12 +617,12 @@ FUNC on_event, 0
     je   .ktab
     cmp  rax, 0xfe20                   ; ISO_Left_Tab = Shift+Tab
     je   .kblank
-    cmp  rax, 'f'
-    je   .kfont
+    cmp  rax, 'g'
+    je   .kfont                        ; G: next font
     cmp  rax, 'v'
     je   .kver
-    cmp  rax, 0xffc8                   ; F11
-    je   .kfs
+    cmp  rax, 'f'
+    je   .kfs                          ; F: fullscreen
     cmp  rax, 0xff1b                   ; Escape leaves fullscreen
     je   .kesc
     cmp  rax, 'q'

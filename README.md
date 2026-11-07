@@ -1,4 +1,4 @@
-# Peep 0.2.14
+# Peep 0.2.15
 
 A music player that is just a screen.
 
@@ -15,9 +15,9 @@ writes to disk.
 
 | Download | Platform |
 |---|---|
-| [`Peep-0.2.14-x86_64.AppImage`](releases/Peep-0.2.14-x86_64.AppImage) | Linux x86-64 |
-| [`peep_0.2.14_amd64.deb`](releases/peep_0.2.14_amd64.deb) | Ubuntu 22.04+ / Debian 12+ (x86-64) |
-| [`Peep-0.2.14.exe`](releases/Peep-0.2.14.exe) | Windows x64 |
+| [`Peep-0.2.15-x86_64.AppImage`](releases/Peep-0.2.15-x86_64.AppImage) | Linux x86-64 |
+| [`peep_0.2.15_amd64.deb`](releases/peep_0.2.15_amd64.deb) | Ubuntu 22.04+ / Debian 12+ (x86-64) |
+| [`Peep-0.2.15.exe`](releases/Peep-0.2.15.exe) | Windows x64 |
 
 ## Philosophy
 
@@ -66,14 +66,14 @@ ratings, recommendations. Peep is built around *listening* to it.
 |---|---|
 | Tab | info and controls on / off (shown while the pointer is over the window) |
 | Shift+Tab | blank: black screen, music continues (again to restore) |
-| F | next font (cycles through the fonts folder, then back to Default) |
+| G | next font (cycles through the fonts folder, then back to Default) |
 | V | show the Peep version in the top-left box for 2 seconds |
 | Space | pause / resume |
 | ← / → | seek −10 s / +10 s |
 | ↑ / ↓ | volume |
 | N or Page Down | next track (on the last track it does nothing, and the music carries on) |
 | P or Page Up | previous track (restarts the current one if more than 3 s in) |
-| F11 | fullscreen; Esc leaves it. The pointer stays usable and hides, with the controls, once it stops moving |
+| F | fullscreen; Esc leaves it. The pointer stays usable and hides, with the controls, once it stops moving |
 | Q | quit |
 
 With Tab on, the info and controls appear while the pointer is over the
@@ -93,7 +93,7 @@ Put `.ttf`, `.otf` or `.ttc` files in:
 * **Windows**: `%APPDATA%\Peep\fonts`, or a `fonts` folder next to
   `Peep.exe` (portable)
 
-Press **F** to cycle through them. The folder is rescanned on every press,
+Press **G** to cycle through them. The folder is rescanned on every press,
 so new fonts show up without restarting Peep. The top-left notice shows the
 selected font's name, drawn in that font. The built-in 8×8 bitmap font is
 **Default**. It covers ASCII only, so pick a TrueType font for accented or

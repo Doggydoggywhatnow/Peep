@@ -415,7 +415,7 @@ static void cmd_tick(void)
     key(XK_space);
     ms(300);
     mark("LATLOG", "MARK", "NOTICE");
-    key(XK_f);
+    key(XK_g);
     sleep(7);
     mark("LATLOG", "MARK", "END");
     key(XK_q);
@@ -459,7 +459,7 @@ static void cmd_fullscreen(void)
     mark("LATLOG", "MARK", "WINDOWED");
     for (int i = 0; i < 6; i++) { warp(W / 2 + 10 * i, H / 2 + 5 * i); pump(60); } /* moves while windowed */
     mark("LATLOG", "MARK", "ENTER");
-    key(XK_F11);
+    key(XK_f);
     pump(1300);
     mark("LATLOG", "MARK", "MOVE1");
     warp(DisplayWidth(d, 0) / 2, DisplayHeight(d, 0) / 2);
@@ -468,7 +468,7 @@ static void cmd_fullscreen(void)
     warp(DisplayWidth(d, 0) / 2 + 40, DisplayHeight(d, 0) / 2 + 20);
     pump(700);
     mark("LATLOG", "MARK", "EXIT");
-    key(XK_F11);
+    key(XK_f);
     pump(1300);
     mark("LATLOG", "MARK", "END");
     key(XK_q);
@@ -570,7 +570,7 @@ static void cmd_stress(void)
         key(i % 3 == 2 ? XK_p : XK_n);
         usleep(i < 20 ? 3000 : 60000);
     }
-    key(XK_F11); sleep(1); key(XK_F11); sleep(1); key(XK_F11); sleep(1);
+    key(XK_f); sleep(1); key(XK_f); sleep(1); key(XK_f); sleep(1);
     key(XK_Escape); sleep(1);
     key(XK_q);
     puts("done=1");

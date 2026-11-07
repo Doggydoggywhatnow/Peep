@@ -2,6 +2,13 @@
 
 All notable changes to Peep.
 
+## 0.2.15
+
+### Changed
+- Two keys changed places: **G** now cycles the font (it was F), and **F** now
+  toggles fullscreen (it was F11). F11 no longer does anything. Esc still
+  leaves fullscreen.
+
 ## 0.2.14
 
 ### Fixed
