@@ -152,7 +152,12 @@ code before relying on them.
   follows from the "never writes to disk" rule; do not add a settings file
   without the owner's approval.
 * The `.exe` is unsigned, so SmartScreen warns on first run.
-* Linux needs glibc 2.34+. `peep_fmod` in `codecs.c` exists to avoid the
+* Linux needs glibc 2.34+, or use the musl build (`make musl`, `build/peep-musl`; the
+  `-musl` download). It is the same objects linked with `musl-gcc` against stand-in
+  libX11/libXext/libasound made from the symbol lists in the Makefile (add a new
+  X11/ALSA call there or the link fails), and `-DMUSL` makes new threads 8 MB
+  because musl's default is 128 KB. Only the decoders have been run on musl; the
+  window and audio paths are untested there. ``peep_fmod` in `codecs.c` exists to avoid the
   glibc 2.38 `fmod` symbol; check `objdump -T build/peep` for new versioned
   symbols after adding C code.
 * The session proxy that built the early releases refused tag pushes and

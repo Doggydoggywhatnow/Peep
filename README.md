@@ -1,4 +1,4 @@
-# Peep 0.4.0
+# Peep 0.4.1
 
 A music player that is just a screen.
 
@@ -15,9 +15,10 @@ writes to disk.
 
 | Download | Platform |
 |---|---|
-| [`Peep-0.4.0-x86_64.AppImage`](releases/Peep-0.4.0-x86_64.AppImage) | Linux x86-64 |
-| [`peep_0.4.0_amd64.deb`](releases/peep_0.4.0_amd64.deb) | Ubuntu 22.04+ / Debian 12+ (x86-64) |
-| [`Peep-0.4.0.exe`](releases/Peep-0.4.0.exe) | Windows x64 |
+| [`Peep-0.4.1-x86_64.AppImage`](releases/Peep-0.4.1-x86_64.AppImage) | Linux x86-64 |
+| [`peep_0.4.1_amd64.deb`](releases/peep_0.4.1_amd64.deb) | Ubuntu 22.04+ / Debian 12+ (x86-64) |
+| [`Peep-0.4.1.exe`](releases/Peep-0.4.1.exe) | Windows x64 |
+| [`Peep-0.4.1-x86_64-musl`](releases/Peep-0.4.1-x86_64-musl) | Linux x86-64 with musl libc (Void musl, Alpine): one file, `chmod +x` and run |
 
 ## Philosophy
 
@@ -180,6 +181,9 @@ make test       # run the test suite (about 2 minutes, see tests/README.md)
   X11 or XWayland, and ALSA, which reaches PipeWire and PulseAudio through
   their ALSA plugins. Aspect-locked resizing depends on the window manager
   honouring size hints; most floating WMs do, and tiling WMs ignore them.
+* **Linux with musl** (Void musl, Alpine): use the `-musl` download. It needs
+  no glibc, only libX11, libXext and ALSA (on Void: `xbps-install libX11 libXext alsa-lib`).
+  Build it yourself with `make musl` (needs `musl-gcc`).
 * **Windows**: Windows 7 or later, x64. The exe isn't code-signed, so
   SmartScreen will warn the first time it runs.
 

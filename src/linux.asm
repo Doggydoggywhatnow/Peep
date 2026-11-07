@@ -29,6 +29,9 @@ extern snd_pcm_drop, snd_pcm_prepare, snd_pcm_drain, snd_pcm_close, snd_pcm_dela
 extern snd_pcm_avail_update, snd_pcm_wait
 extern malloc, free, open, close, lseek, mmap, munmap, opendir, readdir
 extern closedir, strlen, strcasecmp, usleep, pthread_create, pthread_join, poll, write, _exit
+%ifdef MUSL
+extern pthread_attr_init, pthread_attr_setstacksize
+%endif
 extern pipe2, read, getenv, clock_gettime
 
 global main
@@ -142,6 +145,10 @@ blank_cur   resq 1
 cursor_hidden resd 1               ; the pointer is hidden right now
 pcm         resq 1
 tid         resq 1
+%ifdef MUSL
+thr_attr    resq 8                 ; pthread_attr_t (56 bytes)
+thr_ready   resq 1
+%endif
 classhint   resq 2
 pollfd      resq 1
 ev          resb 192
@@ -177,8 +184,9 @@ FUNC main, 16
     mov  A2, 0x80800                   ; O_CLOEXEC | O_NONBLOCK
     call pipe2
     ; player thread
+    call thread_attr
+    mov  A2, rax
     lea  A1, [tid]
-    xor  A2, A2
     lea  A3, [core_player]
     xor  A4, A4
     call pthread_create
@@ -1342,10 +1350,32 @@ FUNC plat_wake, 0
     RET_
 
 ; plat_thread(fn) -> rax thread handle, 0 on failure
+; thread_attr() -> rax attributes for new threads: 0 (the default) everywhere,
+; except on musl, whose default thread stack is 128 KB, too small for the
+; decoders (stb_vorbis alone keeps ~100 KB on the stack). 8 MB, as on glibc.
+FUNC thread_attr, 0
+%ifdef MUSL
+    cmp  dword [thr_ready], 0
+    jne  .have
+    lea  A1, [thr_attr]
+    call pthread_attr_init
+    lea  A1, [thr_attr]
+    mov  A2, 8 << 20
+    call pthread_attr_setstacksize
+    mov  dword [thr_ready], 1
+.have:
+    lea  rax, [thr_attr]
+%else
+    xor  eax, eax
+%endif
+    RET_
+
 FUNC plat_thread, 16
-    mov  A3, A1                        ; start routine
+    mov  rbx, A1                       ; start routine
+    call thread_attr
+    mov  A2, rax
+    mov  A3, rbx
     lea  A1, [L(0)]
-    xor  A2, A2
     xor  A4, A4
     call pthread_create
     xor  ebx, ebx
