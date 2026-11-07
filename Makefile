@@ -5,6 +5,7 @@
 #   make appimage   build/Peep-x86_64.AppImage
 #   make deb        build/peep_<version>_amd64.deb (Debian / Ubuntu package)
 #   make pure       Linux, zero C: native WAV decoder only
+#   make musl       build/peep-musl for musl Linux (Void, Alpine); needs musl-gcc
 #   make test       run the test suite (tests/README.md)
 #   make all        everything
 
@@ -21,7 +22,7 @@ VERSION := $(shell sed -n '1s/^# Peep //p' README.md)
 VERFLAG = -DPEEP_VERSION='"$(VERSION)"'
 CORE_DEPS := src/abi.inc src/font.inc
 
-.PHONY: linux exe pure appimage deb test all clean
+.PHONY: linux exe pure musl appimage deb test all clean
 linux: $(B)/peep
 
 $(B):
@@ -58,6 +59,35 @@ $(B)/peep: $(B)/core.o $(B)/meta.o $(B)/gfx.o $(B)/linux.o $(B)/dec.o $(B)/flac.
 $(B)/peep-pure: $(B)/core_pure.o $(B)/meta.o $(B)/gfx_pure.o $(B)/linux.o $(B)/dec.o $(B)/flac.o $(B)/wav.o
 	$(CC) -no-pie -s -Wl,--as-needed -o $@ $^ -lX11 -lXext -lasound
 pure: $(B)/peep-pure
+
+# ---- musl Linux (Void, Alpine) -----------------------------------------------
+# The same program linked with musl-gcc, so it asks for musl's loader instead of
+# glibc 2.34. Building needs no musl copy of libX11 or libasound: empty stand-ins
+# with the right sonames are made from the names listed here, and on the target
+# the real libraries answer to them. (The link fails if a name is missing, so a
+# new X11 or ALSA call must be added to these lists.)
+MUSLCC ?= musl-gcc
+M := $(B)/musl
+SYMS_X11 := XChangeProperty XConnectionNumber XConvertSelection XCreateBitmapFromData XCreateImage XCreatePixmapCursor XCreateSimpleWindow XDefaultDepth XDefaultGC XDefaultScreen XDefaultVisual XDefineCursor XDisplayHeight XDisplayWidth XFlush XFree XGetWindowProperty XInternAtoms XLookupKeysym XMapWindow XNextEvent XOpenDisplay XPending XPutImage XResizeWindow XRootWindow XSelectInput XSendEvent XSetClassHint XSetWMNormalHints XSetWMProtocols XSetWindowBackgroundPixmap XStoreName XUndefineCursor XUngrabPointer
+SYMS_XEXT := XSyncCreateCounter XSyncInitialize XSyncQueryExtension XSyncSetCounter
+SYMS_ASOUND := snd_pcm_avail_update snd_pcm_close snd_pcm_delay snd_pcm_drain snd_pcm_drop snd_pcm_open snd_pcm_prepare snd_pcm_recover snd_pcm_set_params snd_pcm_wait snd_pcm_writei
+$(M):
+	mkdir -p $(M)
+$(M)/libX11.so.6: | $(M)
+	printf 'void %s(void){}\n' $(SYMS_X11) | $(MUSLCC) -shared -nostdlib -x c - -Wl,-soname,libX11.so.6 -o $@
+$(M)/libXext.so.6: | $(M)
+	printf 'void %s(void){}\n' $(SYMS_XEXT) | $(MUSLCC) -shared -nostdlib -x c - -Wl,-soname,libXext.so.6 -o $@
+$(M)/libasound.so.2: | $(M)
+	printf 'void %s(void){}\n' $(SYMS_ASOUND) | $(MUSLCC) -shared -nostdlib -x c - -Wl,-soname,libasound.so.2 -o $@
+# Same assembly as the glibc build; MUSL gives new threads a bigger stack (musl's
+# default is 128 KB). The C is built without glibc's fortify wrappers.
+$(M)/linux.o: src/linux.asm src/abi.inc | $(M)
+	$(NASM) -f elf64 -DMUSL -Isrc/ $< -o $@
+$(M)/codecs.o: src/codecs.c | $(M)
+	$(MUSLCC) $(CODEC_CFLAGS) -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0 -c $< -o $@
+$(B)/peep-musl: $(B)/core.o $(B)/meta.o $(B)/gfx.o $(M)/linux.o $(B)/dec.o $(B)/flac.o $(B)/wav.o $(M)/codecs.o $(M)/libX11.so.6 $(M)/libXext.so.6 $(M)/libasound.so.2
+	$(MUSLCC) -no-pie -s -Wl,--as-needed -Wl,--gc-sections -o $@ $^ -lm
+musl: $(B)/peep-musl
 
 # ---- Windows ---------------------------------------------------------------
 $(B)/core.obj: src/core.asm $(CORE_DEPS) | $(B)
