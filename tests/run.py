@@ -465,6 +465,39 @@ def pause_seek_resume():
 
 
 @check
+def arrow_seek():
+    """The arrow keys move playback by exactly 10 s: right +10, left -10, quick presses add up, and
+    left with less than 10 s played stops at the very start."""
+    with peep([ramp_wav()]):
+        drive("seekkeys", timeout=60)
+    prog, marks, drops = read_prog()
+    src, heard = wav_data(ramp_wav()), (LOGS / "heard.raw").read_bytes()
+
+    def pos(idx):
+        """Where in the file the heard frame `idx` comes from (every frame of ramp.wav is unique)."""
+        k = src.find(heard[idx * 4: idx * 4 + 16])
+        return k // 4 if k >= 0 else None
+    steps = ["R1", "R2", "L1", "L2", "L3", "BURST", "NET", "END"]
+    moved, landed_at = {}, {}
+    for a, b in zip(steps, steps[1:]):
+        window = [d for d in drops if marks[a] <= d[0] < marks[b]]
+        assert window, "%s: the arrow key did not seek (no audio was dropped)" % a
+        before = pos(window[0][2] - 4)          # the last frames heard before the first seek
+        after = pos(window[-1][2])              # the first frame heard after the last one
+        assert before is not None and after is not None, "%s: the audio heard is not from the file" % a
+        moved[a] = (after - (before + 4)) / SR  # seconds the playback moved
+        landed_at[a] = after
+    # (name, what it should do, seconds, how close)
+    for name, want, tol in (("R1", +10, 0.02), ("R2", +10, 0.02), ("L1", -10, 0.02), ("L2", -10, 0.02),
+                            ("BURST", +30, 0.06), ("NET", -10, 0.06)):
+        assert abs(moved[name] - want) <= tol, \
+            "%s moved playback by %+.3f s (want %+d s)" % (name, moved[name], want)
+    assert landed_at["L3"] == 0, "left near the start landed at frame %d, not at 0:00" % landed_at["L3"]
+    return "right %+.2f/%+.2f s, left %+.2f/%+.2f s, 3 quick rights %+.2f s, net %+.2f s, left at the start -> 0:00" % (
+        moved["R1"], moved["R2"], moved["L1"], moved["L2"], moved["BURST"], moved["NET"])
+
+
+@check
 def clock_cadence():
     """With the controls shown Peep redraws once a second, and not at all while paused."""
     fonts = glob.glob("/usr/share/fonts/**/DejaVuSans.ttf", recursive=True) or \

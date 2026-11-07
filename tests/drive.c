@@ -11,6 +11,7 @@
  *   drive latency              time from a seek key to the changed clock
  *   drive burst SEQ OUT.ppm    key burst (R, L, . = pause), then a screenshot
  *   drive pause plain|seek     pause/resume (optionally seeking while paused)
+ *   drive seekkeys             the arrow keys: +10 s, -10 s, quick presses, the start
  *   drive tick                 how often the screen is redrawn
  *   drive volhold              hold the volume keys down (key repeat)
  *   drive tracks               next/previous timing and behaviour
@@ -396,6 +397,25 @@ static void cmd_pause(const char *mode)
     key(XK_q);
 }
 
+/* ---- seekkeys: the arrow keys move playback by 10 s ---------------------------- */
+static void cmd_seekkeys(void)
+{
+    need_window();
+    ms(1500);
+    mark("PROGLOG", "MARK", "R1");    key(XK_Right); ms(700);        /* +10 s */
+    mark("PROGLOG", "MARK", "R2");    key(XK_Right); ms(700);        /* +10 s */
+    mark("PROGLOG", "MARK", "L1");    key(XK_Left);  ms(700);        /* -10 s */
+    mark("PROGLOG", "MARK", "L2");    key(XK_Left);  ms(700);        /* -10 s */
+    mark("PROGLOG", "MARK", "L3");    key(XK_Left);  ms(700);        /* less than 10 s in: stops at 0:00 */
+    mark("PROGLOG", "MARK", "BURST");                                /* three quick presses add up: +30 s */
+    for (int i = 0; i < 3; i++) { key(XK_Right); ms(4); }
+    ms(700);
+    mark("PROGLOG", "MARK", "NET");                                  /* left, left, right: net -10 s */
+    key(XK_Left); ms(4); key(XK_Left); ms(4); key(XK_Right); ms(700);
+    mark("PROGLOG", "MARK", "END");
+    key(XK_q);
+}
+
 /* ---- tick: redraw cadence ---------------------------------------------------- */
 static void cmd_tick(void)
 {
@@ -586,6 +606,7 @@ int main(int argc, char **argv)
     else if (!strcmp(c, "latency")) cmd_latency();
     else if (!strcmp(c, "burst") && argc > 3) cmd_burst(argv[2], argv[3]);
     else if (!strcmp(c, "pause") && argc > 2) cmd_pause(argv[2]);
+    else if (!strcmp(c, "seekkeys")) cmd_seekkeys();
     else if (!strcmp(c, "tick")) cmd_tick();
     else if (!strcmp(c, "version")) cmd_version();
     else if (!strcmp(c, "volhold")) cmd_volhold();

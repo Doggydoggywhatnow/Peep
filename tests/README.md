@@ -20,6 +20,7 @@ missing); the exit code is 1 if anything fails.
 | `seek_latency` | the clock changes in the same frame as an arrow key (under 20 ms; it used to take 250 ms) |
 | `seek_settle` | after bursts of arrow keys the clock reads the right time, e.g. `RR` and `R.R.L.R` agree |
 | `pause_silence` | the sound stops within ~one audio chunk of pausing (under 40 ms; it used to take 110 ms), and the audio heard across pause and resume is identical to the file: no gap, nothing repeated |
+| `arrow_seek` | the arrow keys move playback by exactly 10 s: right +10, left -10, three quick presses +30, left/left/right nets -10, and left with less than 10 s played stops at 0:00; measured on the audio actually played, not the clock |
 | `pause_seek_resume` | seeking while paused, then resuming, plays from exactly 10 s later |
 | `clock_cadence` | with the controls shown Peep redraws once a second, never for nothing, and not at all while paused; a font notice still expires |
 | `volume_hold` | holding a volume key (key repeat) drops the audio queue at most for the first press and never stalls, and the gain glides instead of stepping |
