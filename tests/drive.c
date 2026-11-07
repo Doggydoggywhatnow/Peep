@@ -12,6 +12,7 @@
  *   drive burst SEQ OUT.ppm    key burst (R, L, . = pause), then a screenshot
  *   drive pause plain|seek     pause/resume (optionally seeking while paused)
  *   drive seekkeys             the arrow keys: +10 s, -10 s, quick presses, the start
+ *   drive seekaudio            many kinds of seeking, for checking the audio stays clean
  *   drive tick                 how often the screen is redrawn
  *   drive volhold              hold the volume keys down (key repeat)
  *   drive tracks               next/previous timing and behaviour
@@ -416,6 +417,34 @@ static void cmd_seekkeys(void)
     key(XK_q);
 }
 
+/* ---- seekaudio: every kind of seeking, to check the audio itself stays clean ---- */
+static void cmd_seekaudio(void)
+{
+    need_window();
+    ms(1500);
+    for (int i = 0; i < 4; i++) { key(i % 2 ? XK_Left : XK_Right); ms(400); }   /* slow, alternating */
+    for (int i = 0; i < 30; i++) { key(i % 2 ? XK_Left : XK_Right); ms(35); }   /* rapid, alternating, net zero */
+    ms(300);
+    mark("PROGLOG", "MARK", "PAUSE");
+    key(XK_space);
+    ms(300);
+    for (int i = 0; i < 4; i++) { key(i % 2 ? XK_Left : XK_Right); ms(50); }    /* seeking while paused */
+    ms(300);
+    mark("PROGLOG", "MARK", "RESUME");
+    key(XK_space);
+    ms(500);
+    for (int i = 0; i < 3; i++) { key(XK_Left); ms(33); }                       /* held left: stops at the start */
+    ms(400);
+    for (int r = 0; r < 2; r++) {                                               /* held right, then held left */
+        for (int i = 0; i < 3; i++) { key(XK_Right); ms(33); }                  /* +30 s */
+        ms(400);
+        for (int i = 0; i < 3; i++) { key(XK_Left); ms(33); }                   /* -30 s */
+        ms(400);
+    }
+    ms(300);
+    key(XK_q);
+}
+
 /* ---- tick: redraw cadence ---------------------------------------------------- */
 static void cmd_tick(void)
 {
@@ -607,6 +636,7 @@ int main(int argc, char **argv)
     else if (!strcmp(c, "burst") && argc > 3) cmd_burst(argv[2], argv[3]);
     else if (!strcmp(c, "pause") && argc > 2) cmd_pause(argv[2]);
     else if (!strcmp(c, "seekkeys")) cmd_seekkeys();
+    else if (!strcmp(c, "seekaudio")) cmd_seekaudio();
     else if (!strcmp(c, "tick")) cmd_tick();
     else if (!strcmp(c, "version")) cmd_version();
     else if (!strcmp(c, "volhold")) cmd_volhold();

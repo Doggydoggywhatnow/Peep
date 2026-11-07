@@ -352,6 +352,12 @@ def wav_data(path):
 # ------------------------------------------------------------------------ tests
 CHECKS = []
 
+# Named groups of checks: `python3 tests/run.py seeking` runs the whole group.
+GROUPS = {
+    "seeking": ["seek_latency", "seek_settle", "arrow_seek", "seek_audio_integrity",
+                "pause_seek_resume", "codec_seek"],
+}
+
 
 def check(f):
     CHECKS.append(f)
@@ -495,6 +501,50 @@ def arrow_seek():
     assert landed_at["L3"] == 0, "left near the start landed at frame %d, not at 0:00" % landed_at["L3"]
     return "right %+.2f/%+.2f s, left %+.2f/%+.2f s, 3 quick rights %+.2f s, net %+.2f s, left at the start -> 0:00" % (
         moved["R1"], moved["R2"], moved["L1"], moved["L2"], moved["BURST"], moved["NET"])
+
+
+@check
+def seek_audio_integrity():
+    """Seeking never garbles the audio: between seeks every sample heard is exactly the file's next one
+    (no wrong, repeated, skipped or silent samples, so no distortion or clicks beyond the cut itself),
+    through slow, rapid, paused and held-key seeking, and each seek's dropout is short."""
+    with peep([ramp_wav()]):
+        drive("seekaudio", timeout=60)
+    prog, marks, drops = read_prog()
+    src, heard = wav_data(ramp_wav()), (LOGS / "heard.raw").read_bytes()
+    end = prog[-1][1]                  # frames actually heard (the rest of the file is queued, unheard)
+    assert end > 4 * SR, "only %.1f s of audio was heard" % (end / SR)
+    assert len(drops) >= 20, "only %d seeks reached the audio device" % len(drops)
+    # Each drop of the queue starts a new stretch of the heard audio: the cut. Within a stretch the audio
+    # must be the file, frame for frame. (Every frame of ramp.wav is unique, so where it comes from is certain.)
+    cuts = sorted({0, *[d[2] for d in drops if 0 < d[2] < end]}) + [end]
+    stretches = frames = 0
+    for a, b in zip(cuts, cuts[1:]):
+        if b - a < 4:
+            continue                   # too short to place in the file
+        k = src.find(heard[a * 4: a * 4 + 16])
+        assert k >= 0 and k % 4 == 0, "heard audio at frame %d (%.2f s) is not from the file" % (a, a / SR)
+        p = k // 4
+        got, want = heard[a * 4: b * 4], src[p * 4: p * 4 + (b - a) * 4]
+        if got != want:
+            n = next(i for i in range(0, len(got), 4) if got[i: i + 4] != want[i: i + 4]) // 4
+            raise AssertionError("garbled audio: %d frames after a seek, sample %d of the stretch is %s, "
+                                 "the file has %s" % (n, n, got[n * 4: n * 4 + 4].hex(), want[n * 4: n * 4 + 4].hex()))
+        stretches += 1
+        frames += b - a
+    # The silence after each seek: from the queue being dropped to the audio playing again.
+    paused = (marks["PAUSE"], marks["RESUME"])
+    gaps = []
+    for t, q, after in drops:
+        if paused[0] <= t <= paused[1]:
+            continue                   # while paused the silence is the point
+        nxt = next((tt for tt, pp in prog if tt > t and pp > after), None)
+        if nxt is not None:
+            gaps.append(nxt - t)
+    assert gaps, "no seek was followed by audio"
+    assert max(gaps) < 25, "the sound dropped out for %.0f ms after a seek" % max(gaps)
+    return "%d seeks, %d stretches (%.1f s) every sample exactly the file's; longest dropout %.0f ms" % (
+        len(drops), stretches, frames / SR, max(gaps))
 
 
 @check
@@ -853,9 +903,12 @@ def main():
     if a.list:
         for c in CHECKS:
             print("%-18s %s" % (c.__name__, c.__doc__))
+        for g, members in GROUPS.items():
+            print("\ngroup %-12s %s" % (g, ", ".join(members)))
         return 0
-    todo = [c for c in CHECKS if not a.names or c.__name__ in a.names]
-    unknown = set(a.names) - {c.__name__ for c in CHECKS}
+    names = [n for name in a.names for n in GROUPS.get(name, [name])]
+    todo = [c for c in CHECKS if not names or c.__name__ in names]
+    unknown = set(names) - {c.__name__ for c in CHECKS}
     if unknown:
         print("unknown check(s):", ", ".join(sorted(unknown)))
         return 2
