@@ -1148,12 +1148,11 @@ FUNC overlay, 64
     lea  eax, [r12d*3]
     shr  eax, 1
     mov  [L(4)], eax                  ; pad
-    imul eax, r12d, 7
-    shr  eax, 2
-    mov  [L(8)], eax                  ; title px
-    lea  eax, [r12d*5]
-    shr  eax, 2
-    mov  [L(12)], eax                 ; artist px
+    lea  eax, [r12d*3]
+    shr  eax, 1
+    mov  [L(8)], eax                  ; title px: 1.5u (a size smaller than before)
+    mov  eax, r12d
+    mov  [L(12)], eax                 ; artist px: u
     lea  eax, [r12d*3]
     shr  eax, 2
     mov  [L(16)], eax                 ; small px: 3u/4, so the time row text
@@ -1373,11 +1372,7 @@ FUNC overlay, 64
     mov  A3d, r13d
     lea  A4, [tbuf]
     call text_fit
-    lea  A1, [tbuf]
-    mov  A2d, [L(8)]
-    mov  A3d, [L(4)]
-    call centre_x                      ; centred above the buttons
-    mov  A1d, eax
+    mov  A1d, [L(4)]                   ; flush left, with the time below
     mov  A2d, [L(36)]
     lea  A3, [tbuf]
     mov  A4d, [L(8)]
@@ -1390,11 +1385,7 @@ FUNC overlay, 64
     mov  A3d, r13d
     lea  A4, [tbuf]
     call text_fit
-    lea  A1, [tbuf]
-    mov  A2d, [L(12)]
-    mov  A3d, [L(4)]
-    call centre_x
-    mov  A1d, eax
+    mov  A1d, [L(4)]
     mov  A2d, [L(32)]
     lea  A3, [tbuf]
     mov  A4d, [L(12)]
@@ -1426,20 +1417,6 @@ FUNC overlay, 64
     mov  A4d, r14d
     call icon
     mov  dword [btn_ok], 1
-    RET_
-
-; centre_x(str, px, margin) -> eax: the x that centres the string in the window.
-; A string as wide as the margins allow stays flush with the left margin.
-FUNC centre_x, 0
-    mov  r12d, A3d                    ; margin
-    call text_width                   ; (str, px) are still in A1, A2
-    mov  ecx, [rc_w]
-    sub  ecx, eax
-    shr  ecx, 1
-    cmp  ecx, r12d
-    jge  .r
-    mov  ecx, r12d
-.r: mov  eax, ecx
     RET_
 
 ; dialog(): font notice, top-left
@@ -2046,7 +2023,12 @@ FUNC core_next_wake, 0
 .ui2:
     call ui_alpha
     test eax, eax
-    jz   .r
+    jnz  .vis
+    cmp  dword [drawn_a], 0            ; the controls are gone, but the last frame
+    je   .r                            ; drawn still shows a trace of them (drawing
+    mov  ebx, 1                        ; it took us past the end of the fade): one
+    jmp  .r                            ; more frame, now, to wipe it
+.vis:
     cmp  eax, 256
     jb   .fade                         ; fading out, either way
     cmp  dword [hover], 0

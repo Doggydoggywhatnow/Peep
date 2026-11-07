@@ -2,6 +2,22 @@
 
 All notable changes to Peep.
 
+## 0.2.14
+
+### Fixed
+- A faint trace of the controls could stay on screen after they finished
+  fading out. If drawing the last fade frame happened to take long enough to
+  cross the end of the fade, nothing redrew to clear it. Peep now always draws
+  one more frame when the controls are gone but the last frame still shows them.
+  (Found because it made a test fail about one run in three.)
+
+### Changed
+- The title and artist are left-aligned again, in line with the time below
+  them (0.2.13 had centred them).
+- The title and artist text is a size smaller: for example at a 1020-pixel
+  window the title letters are about 17% smaller. Small windows, whose text was
+  already small, are unchanged. The time and track/volume text is unchanged.
+
 ## 0.2.13
 
 ### Fixed

@@ -378,7 +378,7 @@ def hover_fade_drag():
         "fade is not monotonic"
     assert r["fade_700_pct"] == 0, "a ghost of the controls remains (%d%%)" % r["fade_700_pct"]
     # 33.7% of the window before 0.2.13; the buttons now share the time row, about 30% shorter
-    assert 20.0 <= r["controls_height_pct"] <= 25.5, \
+    assert 18.0 <= r["controls_height_pct"] <= 25.5, \
         "the controls cover %.1f%% of the window (want about 23.6%%)" % r["controls_height_pct"]
     assert r["art_click_moves"] == 1, "a click on the art did not start a window drag"
     assert r["button_click_moves"] == 0, "a click on a button started a window drag"
