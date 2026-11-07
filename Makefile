@@ -102,6 +102,41 @@ $(DEB): $(B)/peep res/peep.desktop res/peep.png res/copyright CHANGELOG.md
 	dpkg-deb --root-owner-group -Zxz --build $(B)/debroot $@
 deb: $(DEB)
 
+# ---- ARM64 (the arm64 branch) --------------------------------------------------
+# lib-Peep's ARM64 WAV + FLAC decoders (pure assembly, GNU as) and a small test
+# player. On an ARM64 machine:   make a64      (needs as, gcc, libx11-dev, libasound2-dev)
+# Cross-build / test from x86-64: make a64-test CROSS=aarch64-linux-gnu-  (uses qemu-aarch64)
+CROSS ?=
+A64AS ?= $(CROSS)as
+A64CC ?= $(CROSS)gcc
+A64OBJS := $(B)/peep_a64.o $(B)/flac_a64.o
+ifneq (,$(filter aarch64 arm64,$(shell uname -m)))
+QEMU ?=
+else
+QEMU ?= qemu-aarch64
+endif
+$(B)/%_a64.o: arm64/%.s arm64/abi_a64.inc | $(B)
+	$(A64AS) -I arm64 $< -o $@
+$(B)/peep-a64: arm64/player.c arm64/peep.h $(A64OBJS)
+	$(A64CC) -O2 -Wall -o $@ arm64/player.c $(A64OBJS) -lX11 -lasound -lpthread
+$(B)/peepdump_a64: arm64/tools/peepdump.c arm64/peep.h $(A64OBJS)
+	$(A64CC) -static -O2 -DNO_DR -o $@ arm64/tools/peepdump.c $(A64OBJS)
+$(B)/fuzz_a64: arm64/tools/fuzz.c arm64/peep.h $(A64OBJS)
+	$(A64CC) -static -O1 -g -o $@ arm64/tools/fuzz.c $(A64OBJS)
+$(B)/run_a64.sh: $(B)/peepdump_a64
+	printf '#!/bin/sh\nexec $(QEMU) $(CURDIR)/$(B)/peepdump_a64 "$$@"\n' > $@; chmod +x $@
+a64: $(B)/peep-a64
+SEEDDIR := $(B)/seeds
+$(SEEDDIR): arm64/tools/mkflac.py
+	mkdir -p $@ && for s in 1 10 13 15 17 19; do python3 arm64/tools/mkflac.py --gen $@/s$$s --seed $$s >/dev/null; done
+# The decoder test suites: WAV variants, 120 random FLAC streams checked against ground truth,
+# and a mutation fuzz run. Needs python3 + numpy.
+a64-test: $(B)/run_a64.sh $(B)/fuzz_a64 $(SEEDDIR)
+	python3 arm64/tools/testwav.py $(B)/run_a64.sh
+	python3 arm64/tools/mkflac.py --run 120 --seed 1 --tool $(B)/run_a64.sh
+	$(QEMU) $(B)/fuzz_a64 100000 $(SEEDDIR)/s1.flac $(SEEDDIR)/s10.flac $(SEEDDIR)/s13.flac $(SEEDDIR)/s15.flac $(SEEDDIR)/s17.flac $(SEEDDIR)/s19.flac
+.PHONY: a64 a64-test
+
 # ---- Tests -----------------------------------------------------------------
 test: $(B)/peep
 	python3 tests/run.py

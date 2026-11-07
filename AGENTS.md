@@ -116,3 +116,12 @@ sound card or window manager; see `tests/README.md`.
   Peep's window stays the wrong size.
 * Measure before optimizing and keep numbers in the CHANGELOG; the decoders
   were already negligible (about 0.05% of a core), so `-Os` stays.
+
+## The arm64 branch
+
+Experiment, not a release line (no version bump, nothing in `releases/`). It
+vendors lib-Peep's ARM64 WAV/FLAC decoders (`arm64/peep.s`, `flac.s`) and a
+small C test player (`arm64/player.c`); see `arm64/README.md`. Peep itself is
+still x86-64 only: porting `core`, `meta`, `gfx` and `linux` to AArch64 is the
+real job. To test without hardware: `make a64-test CROSS=aarch64-linux-gnu-`
+(needs `binutils-aarch64-linux-gnu`, `gcc-aarch64-linux-gnu`, `qemu-user`).

@@ -2,3 +2,7 @@
 Makefile linguist-detectable=false
 # Test code and its helpers: also not part of the language statistics
 tests/** linguist-vendored
+# arm64 branch: the C front end, header and test tools are not part of the language statistics
+arm64/player.c linguist-vendored
+arm64/peep.h linguist-vendored
+arm64/tools/** linguist-vendored
