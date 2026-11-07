@@ -15,6 +15,8 @@
 
  *   drive keyeff <pid>         every key once, tagged, for measuring key-to-screen and key-to-audio times
  *   drive rendereff            fade, resize, steady redraw and fullscreen, tagged, for measuring drawing
+ *   drive spamkeys <pid> <n> <gap_us>   hold-down-style spam of each key, tagged, to measure lag and side effects
+ *   drive spamtracks <ppm prefix>       the same for next/previous, with screenshots
  *   drive seekcost             lone seek keys, then bursts, timestamped, to measure what each key costs
  *   drive seekaudio            many kinds of seeking, for checking the audio stays clean
  *   drive tick                 how often the screen is redrawn
@@ -657,6 +659,59 @@ static void cmd_rendereff(void)
     key(XK_q);
 }
 
+/* ---- spam: the same key many times, as fast as possible ---------------------------- */
+static void spam(const char *name, KeySym ks, unsigned st, int n, int gap_us, int settle_ms)
+{
+    char b[64];
+    snprintf(b, sizeof b, "S_%s_BEGIN", name); mark2(b);
+    for (int i = 0; i < n; i++) { keymod(ks, st); if (gap_us) usleep(gap_us); }
+    snprintf(b, sizeof b, "S_%s_END", name);   mark2(b);
+    ms(settle_ms);
+    snprintf(b, sizeof b, "S_%s_SETTLE", name); mark2(b);
+}
+static void cmd_spamkeys(int pid, int n, int gap_us)
+{
+    need_window();
+    ms(1500);
+    key(XK_Tab);
+    inside();
+    ms(500);
+    n &= ~1;                                              /* even: toggles end where they began */
+    spam("seek_fwd", XK_Right, 0, 20, gap_us, 300);       /* 20 x 10 s = 200 s */
+    spam("seek_back", XK_Left, 0, 20, gap_us, 300);
+    spam("vol_down", XK_Down, 0, n, gap_us, 300);
+    spam("vol_up", XK_Up, 0, n, gap_us, 300);
+    spam("pause", XK_space, 0, n, gap_us, 300);
+    spam("ui", XK_Tab, 0, n, gap_us, 300);
+    spam("blank", XK_Tab, ShiftMask, n, gap_us, 300);
+    spam("font", XK_g, 0, n, gap_us, 300);
+    spam("version", XK_v, 0, n, gap_us, 300);
+    double t0 = now();
+    key(XK_q);
+    for (int i = 0; i < 4000; i++) {
+        char f[64], bb[512];
+        snprintf(f, sizeof f, "/proc/%d/stat", pid);
+        FILE *s = fopen(f, "r");
+        if (!s) break;
+        char *p = fgets(bb, sizeof bb, s) ? strrchr(bb, ')') : 0;
+        fclose(s);
+        if (!p || p[2] == 'Z') break;
+        usleep(500);
+    }
+    printf("quit_ms=%.1f\n", now() - t0);
+}
+static void cmd_spamtracks(const char *prefix)
+{
+    char out[512];
+    need_window();
+    ms(1500);
+    spam("next", XK_n, 0, 20, 0, 500);
+    snprintf(out, sizeof out, "%s_next.ppm", prefix); shot(out);
+    spam("prev", XK_p, 0, 20, 0, 500);
+    snprintf(out, sizeof out, "%s_prev.ppm", prefix); shot(out);
+    key(XK_q);
+}
+
 static void cmd_quit(int pid, const char *mode)
 {
     need_window();
@@ -740,6 +795,8 @@ int main(int argc, char **argv)
     else if (!strcmp(c, "seekkeys")) cmd_seekkeys();
     else if (!strcmp(c, "keyeff") && argc > 2) cmd_keyeff(atoi(argv[2]));
     else if (!strcmp(c, "rendereff")) cmd_rendereff();
+    else if (!strcmp(c, "spamkeys") && argc > 4) cmd_spamkeys(atoi(argv[2]), atoi(argv[3]), atoi(argv[4]));
+    else if (!strcmp(c, "spamtracks") && argc > 2) cmd_spamtracks(argv[2]);
     else if (!strcmp(c, "seekcost")) cmd_seekcost();
     else if (!strcmp(c, "seekaudio")) cmd_seekaudio();
     else if (!strcmp(c, "tick")) cmd_tick();

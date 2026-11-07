@@ -366,7 +366,7 @@ CHECKS = []
 
 # Named groups of checks: `python3 tests/run.py seeking` runs the whole group.
 GROUPS = {
-    "efficiency": ["key_efficiency", "render_efficiency", "seek_efficiency"],
+    "efficiency": ["key_efficiency", "render_efficiency", "seek_efficiency", "key_spam"],
     "seeking": ["seek_latency", "seek_settle", "arrow_seek", "seek_audio_integrity",
                 "seek_efficiency",
                 "pause_seek_resume", "codec_seek"],
@@ -742,6 +742,144 @@ def render_efficiency():
     assert lat and max(lat) < 60, "a resize step took %.0f ms to show" % max(lat)
     return "idle %d frames, shown %d/3 s; CPU per frame up to %.2f ms; resize steps p50 %.1f ms, max %.1f ms; details in %s" % (
         hid["frames"], shown["frames"], max(cpf), pct(lat, .5), max(lat), REPORTS / "render.json")
+
+
+def ramp_long():
+    """240 s in which every frame is unique (the left and right samples are the low and high halves of a counter)."""
+    def make(p):
+        n = SR * 240
+        write_wav(p, array.array("I", range(0, n * 7, 7)).tobytes())
+    return asset("ramp240.wav", make)
+
+
+SPAM_KEYS = ("seek_fwd", "seek_back", "vol_down", "vol_up", "pause", "ui", "blank", "font", "version")
+
+
+def spam_metrics(name, n, m, frames, prog, drops, cpu, paused=False):
+    """What one burst of the same key did: lag, frames, audio stalls, CPU, all from the logs."""
+    t0, te, ts = m["S_%s_BEGIN" % name], m["S_%s_END" % name], m["S_%s_SETTLE" % name]
+    before = [h for t, h in frames if t < t0]
+    last = before[-1] if before else None
+    mine = [(t, h) for t, h in frames if t0 <= t <= ts]
+    first = next((t - t0 for t, h in mine if h != last), None)
+    drawn_last = None                       # end of the run of frames (each within 60 ms of the last) that starts
+    for t, h in mine:                       # with the burst: later frames are the clock or a fade, not backlog
+        if drawn_last is None or t - drawn_last < 60:
+            drawn_last = t
+        else:
+            break
+    gaps = [b[0] - a[0] for a, b in zip(prog, prog[1:]) if a[1] == b[1] and t0 <= a[0] and b[0] <= ts]
+    run = longest = 0.0
+    for (ta, pa), (tb, pb) in zip(prog, prog[1:]):
+        if t0 <= ta and tb <= ts and pa == pb:
+            run += tb - ta
+            longest = max(longest, run)
+        else:
+            run = 0.0
+    alive = (progress_at(prog, ts) or 0) - (progress_at(prog, ts - 150) or 0)
+    used = cpu.used_ms(t0, ts) if cpu else None
+    return {"keys": n, "sent_ms": te - t0, "keys_per_s": n / max(te - t0, 1e-3) * 1e3,
+            "first_screen_ms": first, "last_frame_after_last_key_ms": None if drawn_last is None else max(0.0, drawn_last - te),
+            "frames_after_last_key": sum(1 for t, h in mine if t > te),
+            "frames": len(mine), "audio_drops": sum(1 for d in drops if t0 <= d[0] <= ts),
+            "longest_audio_stall_ms": None if paused else longest,
+            "audio_playing_at_end": alive > 4000, "cpu_ms": used,
+            "cpu_ms_per_key": None if used is None else used / n}
+
+
+@check
+def key_spam():
+    """Spam every key as fast as the X server takes it (about 20,000 a second): Peep must stay alive, drain
+    the backlog within 300 ms, keep the audio clean and playing, and apply every seek and track key.
+    Per-key lag, frames, stalls and CPU go to build/tests/efficiency/spam.json and spam.txt."""
+    need_pil()
+    from PIL import Image
+    N = 40
+    res, lines = {}, []
+    with peep([ramp_long()]) as p:
+        cpu = CpuSampler(p.pid)
+        try:
+            r = drive("spamkeys", p.pid, N, 0, timeout=90)
+        finally:
+            cpu.close()
+        alive_after = True
+    frames, _, m = read_lat()
+    prog, _, drops = read_prog()
+    src, heard = wav_data(ramp_long()), (LOGS / "heard.raw").read_bytes()
+    for k in SPAM_KEYS:
+        res[k] = spam_metrics(k, 20 if k.startswith("seek") else N - N % 2, m, frames, prog, drops, cpu, paused=(k == "pause"))
+    res["quit"] = {"exit_ms": r["quit_ms"]}
+    problems = []
+
+    def pos(idx):
+        k = src.find(heard[(idx - 4) * 4: idx * 4 + 12]) // 4 if idx >= 4 else 0
+        assert k >= 0, "heard audio at frame %d is not from the file" % idx
+        return k + 4 if idx >= 4 else 0
+    # every seek key went through: 20 x 10 s, exactly
+    for k, want in (("seek_fwd", 200.0), ("seek_back", -200.0)):
+        i0, i1 = progress_at(prog, m["S_%s_BEGIN" % k]), progress_at(prog, m["S_%s_SETTLE" % k])
+        jumped = (pos(i1) - pos(i0) - (i1 - i0)) / SR
+        res[k]["net_seek_s"], res[k]["expected_s"] = jumped, want
+        if abs(jumped - want) > 0.1:
+            problems.append("%s moved %.2f s, not %.0f s: %s of 20 keys counted" % (k, jumped, want, round(abs(jumped) / 10)))
+    # the audio between seeks is the file, sample for sample, through all of it
+    end = progress_at(prog, m["S_seek_back_SETTLE"])
+    cuts = sorted({0, *[d[2] for d in drops if 0 < d[2] < end]}) + [end]
+    bad = 0
+    for a, b in zip(cuts, cuts[1:]):
+        if b - a < 4:
+            continue
+        k = src.find(heard[a * 4: a * 4 + 16]) // 4
+        if heard[a * 4: b * 4] != src[k * 4: k * 4 + (b - a) * 4]:
+            bad += 1
+    res["seek_audio_stretches_garbled"] = bad
+    if bad:
+        problems.append("%d stretches of audio were garbled during seek spam" % bad)
+    # next / previous, on the three-cover album
+    with peep([album_dir()]) as p2:
+        cpu2 = CpuSampler(p2.pid)
+        try:
+            drive("spamtracks", LOGS / "spam", timeout=60)
+        finally:
+            cpu2.close()
+    frames2, _, m2 = read_lat()
+    prog2, _, drops2 = read_prog()
+    for k in ("next", "prev"):
+        res[k] = spam_metrics(k, 20, m2, frames2, prog2, drops2, cpu2)
+    for k, ok in (("next", lambda r_, g, b_: b_ > r_ + 60), ("prev", lambda r_, g, b_: r_ > b_ + 60)):
+        im = Image.open(LOGS / ("spam_%s.ppm" % k)).convert("RGB")
+        c = im.getpixel((im.width // 2, im.height // 2))
+        res[k]["cover_colour_after"] = c
+        if not ok(*c):
+            problems.append("after 20 x %s the cover on screen is %s, not the %s track's" % (k, c, "last (blue)" if k == "next" else "first (red)"))
+    for k in (*SPAM_KEYS, "next", "prev"):
+        d = res[k]
+        lag = d["last_frame_after_last_key_ms"]
+        if lag is not None and lag > 300:
+            problems.append("%s: still drawing %.0f ms after the last key" % (k, lag))
+        if not d["audio_playing_at_end"]:
+            problems.append("%s: the audio was not playing 300 ms after the spam" % k)
+        stall = d["longest_audio_stall_ms"]
+        if stall is not None and stall > 150:
+            problems.append("%s: the audio stalled for %.0f ms" % (k, stall))
+    if r["quit_ms"] > 100:
+        problems.append("quit took %.0f ms after the spam" % r["quit_ms"])
+    f = lambda v, fmt="%.1f": "-" if v is None else fmt % v
+    lines.append("%-9s %5s %8s %9s %8s %7s %6s %10s %8s %9s" % (
+        "key", "keys", "sent ms", "screen ms", "lag ms", "frames", "drops", "stall ms", "cpu ms", "cpu/key"))
+    for k in (*SPAM_KEYS, "next", "prev"):
+        d = res[k]
+        lines.append("%-9s %5d %8s %9s %8s %7d %6d %10s %8s %9s" % (
+            k, d["keys"], f(d["sent_ms"]), f(d["first_screen_ms"]), f(d["last_frame_after_last_key_ms"]), d["frames"],
+            d["audio_drops"], f(d["longest_audio_stall_ms"]), f(d["cpu_ms"]), f(d["cpu_ms_per_key"], "%.3f")))
+    lines.append("")
+    lines.append("seek_fwd moved %.2f s of 200, seek_back %.2f s of -200; garbled audio stretches: %d; quit %.1f ms" % (
+        res["seek_fwd"]["net_seek_s"], res["seek_back"]["net_seek_s"], bad, r["quit_ms"]))
+    lines += ["PROBLEM: " + x for x in problems]
+    write_report("spam", res, lines)
+    assert not problems, "; ".join(problems) + " (see %s)" % (REPORTS / "spam.txt")
+    return "every key spammed: backlog drained in %.0f ms at worst, audio clean, all seeks counted; details in %s" % (
+        max(res[k]["last_frame_after_last_key_ms"] or 0 for k in (*SPAM_KEYS, "next", "prev")), REPORTS / "spam.json")
 
 
 @check
