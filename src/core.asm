@@ -546,10 +546,16 @@ FUNC play_track, 0
     test eax, eax                     ; moved, so the clock never jumps back
     jz   .noseek
     mov  [seek_taken], eax
-    movsxd rax, eax
+    call plat_audio_queued            ; seek from the point being heard, not the
+    mov  rbx, [st_pos]                ; decoder's, which runs ahead by whatever
+    sub  rbx, rax                     ; the device still holds (~100 ms); read just
+    jns  .sk1                         ; before the flush so no audio slips between
+    xor  ebx, ebx
+.sk1:
+    movsxd rax, dword [seek_taken]
     mov  ecx, [st_rate]
     imul rax, rcx
-    add  rax, [st_pos]
+    add  rax, rbx
     jns  .sk2
     xor  eax, eax
 .sk2:
