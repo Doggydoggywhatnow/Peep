@@ -1217,6 +1217,29 @@ def wavc_decoder():
 
 
 @check
+def wavc_play():
+    """Peep itself plays A-law, mu-law, IMA and Microsoft ADPCM WAV, sample for sample as the decoder gives them
+    (the MP3 shim once took ADPCM files, which need scratch memory, and played silence)."""
+    need("ffmpeg")
+    t = decoder_tools()
+    done = []
+    for codec in ("pcm_alaw", "pcm_mulaw", "adpcm_ima_wav", "adpcm_ms"):
+        f = ASSETS / ("play_%s.wav" % codec)
+        if not f.exists():
+            ASSETS.mkdir(parents=True, exist_ok=True)
+            subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=4",
+                            "-ar", "22050", "-ac", "2", "-c:a", codec, str(f)], check=True)
+        ref = subprocess.run([str(t["peepdump"]), str(f)], capture_output=True).stdout
+        with peep([f]):
+            time.sleep(1.5)
+        heard = (LOGS / "heard.raw").read_bytes()
+        n = min(len(heard), len(ref))
+        assert n > 40000 and heard[:n] == ref[:n], "%s: Peep played %d bytes that differ from the decoder's output" % (codec, len(heard))
+        done.append(codec.replace("pcm_", "").replace("adpcm_", "").replace("_wav", ""))
+    return "played exactly the decoder's output: " + ", ".join(done)
+
+
+@check
 def flac_decoder():
     """The native FLAC decoder against ground truth: random streams using every feature of the format."""
     return run_suite("mkflac.py", "--run", "120", "--seed", "1")
