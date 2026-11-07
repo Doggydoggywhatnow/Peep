@@ -69,6 +69,13 @@ cmd_refill    dd 0          ; volume changed: re-render the queued audio
 art_thr       dq 0          ; cover-decoding thread, 0 when none
 job_info      dq 0          ; its track info
 job_buf       dq 0          ; its copy of the picture bytes
+job_idx       dd 0          ; the playlist index the cover is for
+%ifndef WIN64               ; (Windows' millisecond clock ticks every ~15 ms: too coarse for these)
+skip_ms       dq 0          ; when the last Next/Previous key arrived
+skip_prev     dq 0          ; and the one before it
+seek_ms       dq 0          ; when the last seek key arrived
+seek_first    dq 0          ; when the first of the seek keys not yet carried out arrived
+%endif
 job_len       dq 0
 job_hash      dq 0
 
@@ -363,15 +370,9 @@ FUNC open_track, 16
     ; Another skip is already queued and will move on from this track (not
     ; the no-op of Next on the last track): don't publish its info or decode
     ; its cover, and leave the sound device alone.
-    mov  eax, [cmd_skip]
+    call skip_pending
     test eax, eax
     jz   .pub
-    js   .pass
-    mov  rcx, [cur_list]
-    mov  rcx, [rcx + PL_COUNT]
-    dec  ecx
-    cmp  [cur_idx], ecx
-    jae  .pub
 .pass:
     mov  eax, [g_peep + PEEP_RATE]
     mov  [st_rate], eax
@@ -414,6 +415,24 @@ FUNC open_track, 16
     mov  qword [map_ptr], 0
 .fail:
     xor  eax, eax
+    RET_
+
+; skip_pending() -> eax 1 if a queued Next/Previous will move away from the
+; current track (Next on the last track does nothing, so it doesn't count)
+FUNC skip_pending, 0
+    xor  ebx, ebx
+    mov  eax, [cmd_skip]
+    test eax, eax
+    jz   .r
+    inc  ebx
+    js   .r
+    mov  rcx, [cur_list]
+    mov  rcx, [rcx + PL_COUNT]
+    dec  ecx
+    cmp  [cur_idx], ecx
+    jb   .r
+    xor  ebx, ebx
+.r: mov  eax, ebx
     RET_
 
 FUNC close_track, 0
@@ -546,6 +565,26 @@ FUNC play_track, 0
     mov  eax, [cmd_seek]              ; taken, but only cleared once st_pos has
     test eax, eax                     ; moved, so the clock never jumps back
     jz   .noseek
+%ifndef WIN64
+    ; A burst of seek keys is carried out as one seek: wait until the keys have
+    ; been quiet for 2 ms (never more than 10 ms after the first), so a hundred
+    ; presses make one flush and one redraw, not a dozen. A lone press waits
+    ; the 2 ms, which is still far below what anyone can notice.
+    call plat_ms
+    mov  rcx, [seek_ms]
+    add  rcx, 2
+    cmp  rax, rcx
+    jae  .sq
+    mov  rcx, [seek_first]
+    add  rcx, 10
+    cmp  rax, rcx
+    jae  .sq
+    mov  A1, 1
+    call plat_sleep
+    jmp  .loop
+.sq:
+    mov  eax, [cmd_seek]              ; (plat_ms clobbered eax; a late key just joins in)
+%endif
     mov  [seek_taken], eax
     call plat_audio_queued            ; seek from the point being heard, not the
     mov  rbx, [st_pos]                ; decoder's, which runs ahead by whatever
@@ -803,6 +842,8 @@ FUNC publish_info, 0
     call meta_done
     mov  [job_info], rbx
     mov  [job_buf], r15
+    mov  eax, [cur_idx]
+    mov  [job_idx], eax
     mov  [job_len], r13
     mov  [job_hash], r14
     lea  A1, [art_worker]
@@ -844,6 +885,35 @@ FUNC art_join, 0
 ; last one first), so it may update last_art freely.
 FUNC art_worker, 0
     mov  rbx, [job_info]
+    ; A burst of Next/Previous keys passes through tracks it won't stop on: wait
+    ; until the keys have been quiet for 6 ms (at most ~16 ms), but only if
+    ; they are coming in a burst: a lone press is shown at once,, and drop this
+    ; cover, and the info that goes with it, if the player is moving on.
+    xor  r12d, r12d
+.q: call skip_pending
+    test eax, eax
+    jnz  .drop
+    mov  eax, [cur_idx]
+    cmp  eax, [job_idx]
+    jne  .drop
+%ifndef WIN64
+    cmp  r12d, 16
+    jae  .go
+    mov  rcx, [skip_ms]               ; a lone press (the key before it long ago)
+    sub  rcx, [skip_prev]             ; has nothing to wait for: show it at once
+    cmp  rcx, 6
+    jae  .go
+    call plat_ms
+    mov  rcx, [skip_ms]
+    add  rcx, 6
+    cmp  rax, rcx
+    jae  .go
+    inc  r12d
+    mov  A1, 1
+    call plat_sleep
+    jmp  .q
+%endif
+.go:
     mov  A1, [job_buf]
     mov  A2, [job_len]
     call decode_art
@@ -864,6 +934,13 @@ FUNC art_worker, 0
     call free
     mov  A1, rbx
     call hand_over
+    xor  eax, eax
+    RET_
+.drop:
+    mov  A1, [job_buf]
+    call free
+    mov  A1, rbx
+    call info_free
     xor  eax, eax
     RET_
 %endif
@@ -965,7 +1042,32 @@ FUNC vol_touched, 0
 
 ; core_key(k) -> eax 1 if the screen should be redrawn
 FUNC core_key, 0
-    mov  eax, A1d
+    mov  ebx, A1d                     ; plat_ms below clobbers the argument register
+%ifndef WIN64
+    cmp  ebx, K_SEEKBACK
+    je   .stampseek
+    cmp  ebx, K_SEEKFWD
+    je   .stampseek
+    cmp  ebx, K_NEXT
+    je   .stampskip
+    cmp  ebx, K_PREV
+    je   .stampskip
+    jmp  .nostamp
+.stampseek:
+    call plat_ms
+    mov  [seek_ms], rax
+    cmp  dword [cmd_seek], 0
+    jne  .nostamp
+    mov  [seek_first], rax
+    jmp  .nostamp
+.stampskip:
+    call plat_ms
+    mov  rcx, [skip_ms]
+    mov  [skip_prev], rcx
+    mov  [skip_ms], rax
+.nostamp:
+%endif
+    mov  eax, ebx
     cmp  eax, K_PAUSE
     jne  .k2
     xor  dword [g_paused], 1

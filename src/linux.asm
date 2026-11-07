@@ -163,6 +163,9 @@ fontdir     resb PATHMAX
 wake_fd     resd 2
 wake_buf    resb 64
 pollfds     resq 2
+last_present resq 1               ; when the last frame was drawn (ms)
+cap_ms      resd 1                ; set: a frame is due, wait this long for it
+capped      resd 1
 hints       resb 80
 art_asp         resd 2
 tsz         resd 2
@@ -410,6 +413,18 @@ FUNC main, 16
 .noinfo:
     cmp  dword [dirty], 0
     je   .wait
+    ; At most one frame every 4 ms: the first change is drawn at once, but a
+    ; burst of keys behind it is drawn as one frame, not one per handful.
+    call plat_ms
+    mov  rcx, [last_present]
+    add  rcx, 4
+    cmp  rax, rcx
+    jae  .draw
+    sub  rcx, rax
+    mov  [cap_ms], ecx
+    jmp  .wait
+.draw:
+    mov  [last_present], rax
     mov  dword [dirty], 0
     call present
     ; XFlush may have pulled new events into Xlib's queue while it waited
@@ -424,6 +439,18 @@ FUNC main, 16
     mov  dword [pollfds + 12], 1
     call core_next_wake                ; -1: sleep until something happens
     mov  ebx, eax
+    mov  eax, [cap_ms]                 ; a frame is waiting out its 4 ms: wake for it
+    test eax, eax
+    jz   .nocap
+    mov  dword [cap_ms], 0
+    mov  dword [capped], 1
+    test ebx, ebx
+    js   .usecap
+    cmp  ebx, eax
+    jbe  .nocap
+.usecap:
+    mov  ebx, eax
+.nocap:
     lea  A1, [pollfds]
     mov  A2, 2
     movsxd A3, ebx
@@ -432,9 +459,12 @@ FUNC main, 16
     call update_cursor                 ; fullscreen: maybe it is time to hide the pointer
     test ebx, ebx
     jnz  .woke
+    cmp  dword [capped], 0
+    jne  .woke                         ; the frame we were waiting for is still due
     call core_tick_needed              ; timer tick: redraw only if it shows
     mov  [dirty], eax                  ; something new
 .woke:
+    mov  dword [capped], 0
     mov  A1d, [wake_fd]                ; drain the wake pipe
     lea  A2, [wake_buf]
     mov  A3, 64
