@@ -2,6 +2,24 @@
 
 All notable changes to Peep.
 
+## 0.5.0
+
+### Added
+- **Compressed WAV plays.** A-law, mu-law, IMA ADPCM and Microsoft ADPCM WAV files
+  (the old telephone and game formats) now play: mono or stereo for ADPCM, up to
+  eight channels for A-law and mu-law. They were the one WAV family 0.4.0
+  dropped when `dr_wav` went. Seeking lands on the exact sample (it decodes from
+  the start of the block that holds it).
+
+### Changed
+- **Faster FLAC.** The FLAC decoder is the newest from lib-Peep: the predictor
+  now runs inside the residual loop, with SSE4.1 and BMI2 versions chosen by
+  the CPU at run time (a CPU without them keeps the plain loop). A 300 s
+  stereo file decodes in 69 ms instead of 94 ms (best of five, on a shared
+  virtual machine). The audio is bit for bit the same.
+- Tested with the full lib-Peep suites against Peep's own objects, and again with
+  the SSE4.1 and BMI2 code switched off.
+
 ## 0.4.5
 
 ### Fixed

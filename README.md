@@ -1,4 +1,4 @@
-# Peep 0.4.5
+# Peep 0.5.0
 
 A music player that is just a screen.
 
@@ -15,10 +15,10 @@ writes to disk.
 
 | Download | Platform |
 |---|---|
-| [`Peep-0.4.5-x86_64.AppImage`](releases/Peep-0.4.5-x86_64.AppImage) | Linux x86-64 |
-| [`peep_0.4.5_amd64.deb`](releases/peep_0.4.5_amd64.deb) | Ubuntu 22.04+ / Debian 12+ (x86-64) |
-| [`Peep-0.4.5.exe`](releases/Peep-0.4.5.exe) | Windows x64 |
-| [`Peep-0.4.5-x86_64-musl`](releases/Peep-0.4.5-x86_64-musl) | Linux x86-64 with musl libc (Void musl, Alpine): one file, `chmod +x` and run |
+| [`Peep-0.5.0-x86_64.AppImage`](releases/Peep-0.5.0-x86_64.AppImage) | Linux x86-64 |
+| [`peep_0.5.0_amd64.deb`](releases/peep_0.5.0_amd64.deb) | Ubuntu 22.04+ / Debian 12+ (x86-64) |
+| [`Peep-0.5.0.exe`](releases/Peep-0.5.0.exe) | Windows x64 |
+| [`Peep-0.5.0-x86_64-musl`](releases/Peep-0.5.0-x86_64-musl) | Linux x86-64 with musl libc (Void musl, Alpine): one file, `chmod +x` and run |
 
 ## Philosophy
 
@@ -129,6 +129,7 @@ src/peep.asm    the decoder kernel: built-in 16-bit PCM WAV (every header
                 layout), channel mapping to stereo, codec dispatch
 src/wav.asm     the other WAV formats: unsigned 8-bit, 12/16/20/24/32-bit PCM,
                 32/64-bit float, plain or extensible, 1 to 8 channels
+src/wavc.asm    compressed WAV: A-law, mu-law, IMA ADPCM, Microsoft ADPCM
 src/flac.asm    native FLAC decoder: 4 to 31 bit, 1 to 8 channels, every
                 stereo mode, every frame CRC-checked, seeking without a
                 seek table
@@ -146,7 +147,8 @@ tests/          the test suite: drives the real program (see tests/README.md)
 to well-tested public-domain single-file libraries:
 
 * `dr_mp3` (David Reid) and `stb_vorbis` decode MP3 and Ogg Vorbis. WAV (every
-  PCM and float format) and FLAC are decoded by Peep's own assembly.
+  PCM and float format, A-law, mu-law and ADPCM) and FLAC are decoded by Peep's own
+  assembly.
 * `stb_image` decodes cover pictures.
 * `stb_truetype` (Sean Barrett) rasterises font glyphs.
 

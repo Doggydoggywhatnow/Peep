@@ -38,7 +38,10 @@ src/abi.inc     calling-convention glue: one source, two ABIs (read it first)
 src/core.asm    playlist, player thread, mixer, cover worker thread, input
 src/peep.asm    decoder kernel: 16-bit PCM WAV, channel mapping, codec dispatch
 src/wav.asm     the other WAV formats: 8/12/20/24/32-bit PCM, 32/64-bit float
-src/flac.asm    native FLAC decoder (all three from lib-Peep 0.5.0, in Peep's own glue)
+src/wavc.asm    compressed WAV: A-law, mu-law, IMA and MS ADPCM
+src/flac.asm    native FLAC decoder (these decoders are from lib-Peep's `dev` branch, in Peep's own glue:
+                `default rel` and the `global` lines are the only edits; copy new versions over
+                and re-apply them. Tests that came with them are in `tests/decoders/`)
 src/gfx.asm     scaling, overlay, text, hover/fade, clock scheduling
 src/meta.asm    tag parsing (ID3, FLAC, Ogg, WAV)
 src/linux.asm   X11 window, ALSA, drag and drop, resize sync, startup order
@@ -142,7 +145,8 @@ code before relying on them.
 * x86-64 only. No ARM builds and no macOS. The Linux and musl builds compile the C with
   `-O3 -march=x86-64-v2` (`CODEC_CFLAGS_LINUX`), so they need SSE4.2; Windows stays `-Os`.
 * Audio: MP3, FLAC (4 to 31 bit; not 32), Ogg **Vorbis** and WAV (8 to 32-bit PCM and
-  float, up to 8 channels). No Opus, AAC/M4A or WMA, and no A-law, µ-law or ADPCM WAV.
+  float, A-law, µ-law, IMA and MS ADPCM, up to 8 channels). No Opus, AAC/M4A or WMA. ADPCM is
+  mono or stereo; IMA ADPCM from ffmpeg differs from the reference by a few units (it rounds differently).
 * Covers come only from the file's tags (JPEG, PNG, BMP, GIF). There is no
   `folder.jpg` fallback and no WebP.
 * Playback is path order. No shuffle, repeat or saved queue. A drop replaces
