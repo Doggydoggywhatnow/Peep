@@ -18,6 +18,7 @@ import random
 import re
 import shutil
 import signal
+import struct
 import subprocess
 import threading
 import sys
@@ -1237,6 +1238,49 @@ def wavc_play():
         assert n > 40000 and heard[:n] == ref[:n], "%s: Peep played %d bytes that differ from the decoder's output" % (codec, len(heard))
         done.append(codec.replace("pcm_", "").replace("adpcm_", "").replace("_wav", ""))
     return "played exactly the decoder's output: " + ", ".join(done)
+
+
+def tone_wav(name, hz, seconds=10):
+    """A loud sine (24000 of 32767, left and right the same) that starts at zero."""
+    def make(p):
+        import math
+        n = SR * seconds
+        d = array.array("h", [int(24000 * math.sin(2 * math.pi * hz * i / SR)) for i in range(n)])
+        inter = array.array("h", bytes(n * 4))
+        inter[0::2] = d
+        inter[1::2] = d
+        write_wav(p, inter.tobytes())
+    return asset(name, make)
+
+
+@check
+def drop_clean_cut():
+    """Dropping a file while one plays stops the old one at its quietest frame (no click) and starts the new one
+    at once: the old track's last sample is near zero, its audio before that is untouched, the new track follows."""
+    a, b = tone_wav("tone_a.wav", 440), tone_wav("tone_b.wav", 523)
+    A, B = wav_data(a), wav_data(b)
+    worst, latest = 0, 0
+    for delay in (1500, 1517, 1531, 1549):          # different points of the wave
+        with peep([a]):
+            drive("dropfile", delay, b, timeout=60)
+        prog, marks, drops = read_prog()
+        heard = (LOGS / "heard.raw").read_bytes()
+        e = heard.find(B[:128])
+        assert e >= 0 and e % 4 == 0, "the dropped file never started playing (delay %d)" % delay
+        e //= 4
+        left, right = struct.unpack("<hh", heard[(e - 1) * 4: e * 4])
+        worst = max(worst, abs(left), abs(right))
+        assert max(abs(left), abs(right)) <= 3000, \
+            "the old track was cut at %d/%d of 24000 (a click) at frame %d, delay %d ms" % (left, right, e, delay)
+        c = [d for d in drops if d[0] >= marks["DROP"]][0][2]     # where the audio after the drop begins
+        assert heard[: (c - 3) * 4] == A[: (c - 3) * 4], "the audio before the drop was changed"
+        # a sine repeats, so look for the tail only where it should be (within 2 frames of c, as in pause_silence)
+        assert any(heard[c * 4: e * 4] == A[k * 4: k * 4 + (e - c) * 4] for k in range(c - 2, c + 3)), \
+            "the tail of the old track was not its own audio"
+        start = next(t for t, p in prog if t >= marks["DROP"] and p > e)
+        latest = max(latest, start - marks["DROP"])
+        assert start - marks["DROP"] < 150, "the new file started %.0f ms after the drop" % (start - marks["DROP"])
+    return "old track ended at |sample| <= %d of 24000, new one heard %.0f ms after the drop (4 timings)" % (worst, latest)
 
 
 @check

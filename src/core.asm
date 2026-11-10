@@ -528,7 +528,7 @@ FUNC play_track, 0
     cmp  dword [g_quit], 0
     jne  .out
     cmp  qword [pending_list], 0
-    jne  .flushout
+    jne  .newlist
     ; --- skip / previous -------------------------------------------------
     xor  eax, eax
     xchg eax, [cmd_skip]
@@ -688,6 +688,64 @@ FUNC play_track, 0
 .ended:
     inc  dword [cur_idx]
     RET_
+.newlist:
+    ; New files were dropped on the window. Stop the track that is playing, and start
+    ; the new one at once, without a click: the queued audio is thrown away, then the
+    ; next few milliseconds the listener would have heard are decoded again and cut at
+    ; their quietest frame, so the old track ends where its wave is nearly at rest
+    ; instead of in mid-swing. The audio is not changed, only ended a little early.
+    cmp  dword [g_paused], 0
+    jne  .flushout
+    call plat_audio_queued
+    test rax, rax
+    jle  .flushout
+    mov  rbx, [st_pos]
+    sub  rbx, rax                     ; the frame being heard now
+    jns  .nl1
+    xor  ebx, ebx
+.nl1:
+    call plat_audio_flush
+    lea  A1, [g_peep]
+    mov  A2, rbx
+    call peep_seek
+    lea  A1, [g_peep]
+    lea  A2, [decbuf]
+    mov  A3, 256                      ; ~6 ms at 44.1 kHz
+    call peep_fill
+    test rax, rax
+    jz   .out
+    mov  rbx, rax
+    lea  r8, [decbuf]
+    xor  r10d, r10d
+    xor  r11d, r11d
+    mov  r9d, 0x7fffffff
+.nl2:
+    movsx eax, word [r8 + r10*4]
+    mov  edx, eax
+    sar  edx, 31
+    xor  eax, edx
+    sub  eax, edx
+    movsx ecx, word [r8 + r10*4 + 2]
+    mov  edx, ecx
+    sar  edx, 31
+    xor  ecx, edx
+    sub  ecx, edx
+    add  eax, ecx
+    cmp  eax, r9d
+    jae  .nl3
+    mov  r9d, eax
+    mov  r11d, r10d
+.nl3:
+    inc  r10d
+    cmp  r10, rbx
+    jb   .nl2
+    lea  rbx, [r11 + 1]               ; the frames up to and including the quietest
+    mov  A1, rbx
+    call mix
+    lea  A1, [outbuf]
+    mov  A2, rbx
+    call plat_audio_write
+    jmp  .out
 .flushout:
     call plat_audio_flush
 .out:

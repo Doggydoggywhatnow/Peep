@@ -13,6 +13,7 @@
  *   drive pause plain|seek     pause/resume (optionally seeking while paused)
  *   drive seekkeys             the arrow keys: +10 s, -10 s, quick presses, the start
 
+ *   drive dropfile <delay ms> <path>   drag a file onto Peep (XDND) after a delay; marks DROP
  *   drive keyeff <pid>         every key once, tagged, for measuring key-to-screen and key-to-audio times
  *   drive rendereff            fade, resize, steady redraw and fullscreen, tagged, for measuring drawing
  *   drive spamkeys <pid> <n> <gap_us>   hold-down-style spam of each key, tagged, to measure lag and side effects
@@ -712,6 +713,65 @@ static void cmd_spamtracks(const char *prefix)
     key(XK_q);
 }
 
+/* ---- dropfile: drag a file onto the window, as a file manager does (XDND) ----------------- */
+static void dnd_msg(Window sw, Atom type, long l1, long l2, long l3, long l4)
+{
+    XEvent e = {0};
+    e.xclient.type = ClientMessage;
+    e.xclient.window = w;
+    e.xclient.message_type = type;
+    e.xclient.format = 32;
+    e.xclient.data.l[0] = sw;
+    e.xclient.data.l[1] = l1;
+    e.xclient.data.l[2] = l2;
+    e.xclient.data.l[3] = l3;
+    e.xclient.data.l[4] = l4;
+    XSendEvent(d, w, 0, NoEventMask, &e);
+    XSync(d, 0);
+}
+static void cmd_dropfile(int delay, const char *path)
+{
+    need_window();
+    ms(delay);
+    Window sw = XCreateSimpleWindow(d, R, 0, 0, 10, 10, 0, 0, 0);
+    Atom sel = XInternAtom(d, "XdndSelection", 0), uri = XInternAtom(d, "text/uri-list", 0),
+         enter = XInternAtom(d, "XdndEnter", 0), pos = XInternAtom(d, "XdndPosition", 0),
+         drop = XInternAtom(d, "XdndDrop", 0), copy = XInternAtom(d, "XdndActionCopy", 0);
+    XSetSelectionOwner(d, sel, sw, CurrentTime);
+    char text[4200];
+    snprintf(text, sizeof text, "file://%s\r\n", path);
+    int W, H;
+    win_size(&W, &H);
+    dnd_msg(sw, enter, 5L << 24, uri, 0, 0);
+    dnd_msg(sw, pos, 0, ((long)(W / 2) << 16) | (H / 2), 0, copy);
+    mark("PROGLOG", "MARK", "DROP");
+    mark("LATLOG", "MARK", "DROP");
+    dnd_msg(sw, drop, 0, 0, 0, 0);
+    double end = now() + 600;
+    while (now() < end) {                         /* we are the selection owner: answer Peep's request */
+        while (XPending(d)) {
+            XEvent e;
+            XNextEvent(d, &e);
+            if (e.type == SelectionRequest) {
+                XSelectionRequestEvent *r = &e.xselectionrequest;
+                XChangeProperty(d, r->requestor, r->property, r->target, 8, PropModeReplace,
+                                (unsigned char *)text, (int)strlen(text));
+                XEvent n = {0};
+                n.xselection.type = SelectionNotify;
+                n.xselection.requestor = r->requestor;
+                n.xselection.selection = r->selection;
+                n.xselection.target = r->target;
+                n.xselection.property = r->property;
+                n.xselection.time = r->time;
+                XSendEvent(d, r->requestor, 0, NoEventMask, &n);
+                XSync(d, 0);
+            }
+        }
+        usleep(1000);
+    }
+    key(XK_q);
+}
+
 static void cmd_quit(int pid, const char *mode)
 {
     need_window();
@@ -797,6 +857,7 @@ int main(int argc, char **argv)
     else if (!strcmp(c, "rendereff")) cmd_rendereff();
     else if (!strcmp(c, "spamkeys") && argc > 4) cmd_spamkeys(atoi(argv[2]), atoi(argv[3]), atoi(argv[4]));
     else if (!strcmp(c, "spamtracks") && argc > 2) cmd_spamtracks(argv[2]);
+    else if (!strcmp(c, "dropfile") && argc > 3) cmd_dropfile(atoi(argv[2]), argv[3]);
     else if (!strcmp(c, "seekcost")) cmd_seekcost();
     else if (!strcmp(c, "seekaudio")) cmd_seekaudio();
     else if (!strcmp(c, "tick")) cmd_tick();
