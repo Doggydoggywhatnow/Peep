@@ -335,8 +335,12 @@ def read_frames():
     return out
 
 
+REWINDS = []                 # the REWIND lines of the last read_prog(): (ms, frames taken back, stream length after)
+
+
 def read_prog():
-    prog, marks, drops = [], {}, []
+    global REWINDS
+    prog, marks, drops, rewinds = [], {}, [], []
     for line in (LOGS / "prog.log").read_text().splitlines():
         p = line.split()
         if not p:
@@ -345,8 +349,11 @@ def read_prog():
             marks[p[2]] = float(p[1])
         elif p[0] == "DROP":
             drops.append((float(p[1]), int(p[2]), int(p[3])))
+        elif p[0] == "REWIND":
+            rewinds.append((float(p[1]), int(p[2]), int(p[3])))
         else:
             prog.append((float(p[0]), int(p[1])))
+    REWINDS = rewinds
     return prog, marks, drops
 
 
@@ -1253,10 +1260,32 @@ def tone_wav(name, hz, seconds=10):
     return asset(name, make)
 
 
+def check_clean_cut(A, B, heard, drops, marks, mark, expect_drop, latency=40):
+    """The old track (A) ends at its quietest frame and the new one (B) follows: A is untouched before the cut,
+    the tail is A's own audio, the last frame is near zero, and B is heard soon after `mark`."""
+    e = heard.find(B[:128])
+    assert e >= 0 and e % 4 == 0, "the new track never started"
+    e //= 4
+    left, right = struct.unpack("<hh", heard[(e - 1) * 4: e * 4])
+    assert max(abs(left), abs(right)) <= 3000, "the old track was cut at %d/%d of 24000 (a click)" % (left, right)
+    after = [d for d in drops if d[0] >= marks[mark]]
+    assert bool(after) == expect_drop, "the queue was %sdropped" % ("not " if expect_drop else "")
+    if after:
+        c = after[0][2]
+    else:
+        assert REWINDS, "the audio was neither dropped nor taken back"
+        c = [r for r in REWINDS if r[0] >= marks[mark]][0][2]
+    assert heard[: (c - 3) * 4] == A[: (c - 3) * 4], "the audio before the cut was changed"
+    # a sine repeats, so look for the tail only where it should be (within 2 frames of c)
+    assert any(heard[c * 4: e * 4] == A[k * 4: k * 4 + (e - c) * 4] for k in range(c - 2, c + 3)), \
+        "the tail of the old track was not its own audio"
+    return max(abs(left), abs(right)), e
+
+
 @check
 def drop_clean_cut():
-    """Dropping a file while one plays stops the old one at its quietest frame (no click) and starts the new one
-    at once: the old track's last sample is near zero, its audio before that is untouched, the new track follows."""
+    """Dropping a file while one plays ends the old track at its quietest frame (no click) without dropping the
+    audio queue, leaves its audio untouched, and starts the new file within 40 ms."""
     a, b = tone_wav("tone_a.wav", 440), tone_wav("tone_b.wav", 523)
     A, B = wav_data(a), wav_data(b)
     worst, latest = 0, 0
@@ -1265,22 +1294,76 @@ def drop_clean_cut():
             drive("dropfile", delay, b, timeout=60)
         prog, marks, drops = read_prog()
         heard = (LOGS / "heard.raw").read_bytes()
-        e = heard.find(B[:128])
-        assert e >= 0 and e % 4 == 0, "the dropped file never started playing (delay %d)" % delay
-        e //= 4
-        left, right = struct.unpack("<hh", heard[(e - 1) * 4: e * 4])
-        worst = max(worst, abs(left), abs(right))
-        assert max(abs(left), abs(right)) <= 3000, \
-            "the old track was cut at %d/%d of 24000 (a click) at frame %d, delay %d ms" % (left, right, e, delay)
-        c = [d for d in drops if d[0] >= marks["DROP"]][0][2]     # where the audio after the drop begins
-        assert heard[: (c - 3) * 4] == A[: (c - 3) * 4], "the audio before the drop was changed"
-        # a sine repeats, so look for the tail only where it should be (within 2 frames of c, as in pause_silence)
-        assert any(heard[c * 4: e * 4] == A[k * 4: k * 4 + (e - c) * 4] for k in range(c - 2, c + 3)), \
-            "the tail of the old track was not its own audio"
+        w, e = check_clean_cut(A, B, heard, drops, marks, "DROP", expect_drop=False)
         start = next(t for t, p in prog if t >= marks["DROP"] and p > e)
-        latest = max(latest, start - marks["DROP"])
-        assert start - marks["DROP"] < 150, "the new file started %.0f ms after the drop" % (start - marks["DROP"])
-    return "old track ended at |sample| <= %d of 24000, new one heard %.0f ms after the drop (4 timings)" % (worst, latest)
+        assert start - marks["DROP"] < 40, "the new file started %.0f ms after the drop" % (start - marks["DROP"])
+        worst, latest = max(worst, w), max(latest, start - marks["DROP"])
+    return "old track ended at |sample| <= %d of 24000, no queue drop, new one heard %.0f ms after the drop (4 timings)" % (worst, latest)
+
+
+@check
+def skip_clean_cut():
+    """Next in the middle of a track ends it the same way: no click, no queue drop, the next track follows."""
+    a, b = tone_wav("tone_a.wav", 440), tone_wav("tone_b.wav", 523)
+    A, B = wav_data(a), wav_data(b)
+    worst = 0
+    for delay in (1500, 1517, 1531):
+        with peep([a, b]):
+            drive("keyat", delay, "n", timeout=60)
+        prog, marks, drops = read_prog()
+        heard = (LOGS / "heard.raw").read_bytes()
+        w, e = check_clean_cut(A, B, heard, drops, marks, "KEY", expect_drop=False)
+        start = next(t for t, p in prog if t >= marks["KEY"] and p > e)
+        assert start - marks["KEY"] < 60, "the next track started %.0f ms after the key" % (start - marks["KEY"])
+        worst = max(worst, w)
+    return "Next ended the track at |sample| <= %d of 24000, no queue drop" % worst
+
+
+@check
+def volume_instant():
+    """A volume key is heard within 30 ms with no queue drop, and the audio around it is the file's, in order."""
+    with peep([ramp_wav()]):
+        drive("keyat", 1500, "down", timeout=60)
+    prog, marks, drops = read_prog()
+    assert not [d for d in drops if d[0] >= marks["KEY"]], "a volume key dropped the audio queue"
+    assert REWINDS, "the volume key did not take the queued audio back"
+    t, taken, c = [r for r in REWINDS if r[0] >= marks["KEY"]][0]
+    assert t - marks["KEY"] < 30, "the audio was taken back %.0f ms after the key" % (t - marks["KEY"])
+    src = array.array("h"); src.frombytes(wav_data(ramp_wav()))
+    hd = array.array("h"); hd.frombytes((LOGS / "heard.raw").read_bytes())
+    s_r, h_r = src[1::2], hd[1::2]                  # the right channel is random: it shows any repeat or skip
+    def gain(lo, d=0):
+        num = sum(h_r[k] * s_r[k + d] for k in range(lo, lo + 512))
+        den = sum(s_r[k + d] * s_r[k + d] for k in range(lo, lo + 512))
+        return 256 * num / den
+    want = 231                                      # one step down from full volume
+    g = gain(c + 1500)
+    assert abs(g - want) < 4, "the gain after the key is %.1f/256, not %d" % (g, want)
+    assert all(abs(gain(c + 1500, d) - want) > abs(g - want) for d in (-2, -1, 1, 2)), "a frame was repeated or skipped"
+    return "gain %.0f/256 after the key, taken back %.0f ms after it, no queue drop" % (g, t - marks["KEY"])
+
+
+@check
+def rewind_fallback():
+    """On a sound system that cannot take audio back (SIM_NO_REWIND, and the Windows build), a drop and a volume key
+    behave as before: the queue is dropped for the drop, nothing changes for the volume key, audio stays intact."""
+    a, b = tone_wav("tone_a.wav", 440), tone_wav("tone_b.wav", 523)
+    A, B = wav_data(a), wav_data(b)
+    with peep([a], SIM_NO_REWIND="1"):
+        drive("dropfile", 1500, b, timeout=60)
+    prog, marks, drops = read_prog()
+    heard = (LOGS / "heard.raw").read_bytes()
+    after = [d for d in drops if d[0] >= marks["DROP"]]
+    assert after and not REWINDS, "without rewind the drop should flush the queue"
+    e = heard.find(B[:128]) // 4
+    assert e > 0, "the dropped file never started"
+    assert heard[: (after[0][2] - 3) * 4] == A[: (after[0][2] - 3) * 4], "the audio before the drop was changed"
+    with peep([ramp_wav()], SIM_NO_REWIND="1"):
+        drive("keyat", 1500, "down", timeout=60)
+    prog, marks, drops = read_prog()
+    assert not REWINDS and not [d for d in drops if d[0] >= marks["KEY"]], "a volume key touched the queue"
+    assert prog[-1][1] > 44100, "playback stopped"
+    return "drop flushed the queue, volume key left it alone, audio intact"
 
 
 @check

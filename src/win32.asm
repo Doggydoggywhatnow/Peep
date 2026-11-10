@@ -34,7 +34,7 @@ extern malloc, free, memcpy, wcslen, _wcsicmp
 
 global main
 global plat_audio_open, plat_audio_write, plat_audio_flush, plat_audio_close
-global plat_audio_queued, plat_audio_wait
+global plat_audio_queued, plat_audio_wait, plat_audio_rewind
 global plat_map, plat_unmap, plat_sleep, plat_title, plat_cmp
 global plat_wake, plat_ms, plat_font_scan, plat_font_dir
 global plat_thread, plat_join
@@ -1419,6 +1419,11 @@ FUNC plat_audio_flush, 0
     call release_all                   ; ... and the play position restarts at 0
     mov  dword [w_frames], 0
 .r: RET_
+
+; plat_audio_rewind(keep, max) -> rax: waveOut cannot take audio back, so 0 (the caller flushes)
+FUNC plat_audio_rewind, 0
+    xor  eax, eax
+    RET_
 
 ; plat_audio_queued() -> rax frames written but not yet heard (0 if unknown)
 FUNC plat_audio_queued, 0

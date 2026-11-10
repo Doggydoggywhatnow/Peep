@@ -2,6 +2,26 @@
 
 All notable changes to Peep.
 
+## 0.5.1
+
+### Changed
+- **No click when a track is cut off, and volume is heard at once.** Dropping new
+  files while one plays, Next, Previous and the volume keys used to stop the sound
+  device, throw away the audio waiting in it and start it again. That cut the old
+  track in mid-wave (a click or crackle, issue #1) and, on a real sound system, could
+  leave a small gap. Peep now takes the not-yet-played audio back from the device
+  (`snd_pcm_rewind`) and keeps the device running: the old track ends at its
+  quietest frame a few milliseconds later (the audio itself is unchanged), the new
+  one follows at once, and a volume key is heard within about 11 ms with nothing
+  dropped. If the sound system cannot take audio back (and on Windows), Peep does
+  what it did before.
+- **A bigger sound buffer (250 ms, was 100 ms)** on Linux, because nothing waits on
+  it any more. It should help with the occasional stutter and short stops in long
+  files (issues #2 and #3). Seek, pause and "previous restarts the track" still stop
+  the device and can still click.
+- Tested against a model sound device only; real sound systems (PipeWire, Pulse) and
+  Windows were not run. The 250 ms buffer is not covered by any test.
+
 ## 0.5.0
 
 ### Added

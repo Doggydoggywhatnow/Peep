@@ -9,7 +9,9 @@
  *   - HEARD   file: every frame that is, or will be, heard, in order. A
  *                   drop (snd_pcm_drop) removes the not-yet-played frames;
  *   - PROGLOG file: "<ms> <frames heard so far>" every 2 ms, plus
- *                   "DROP <ms> <frames dropped> <stream length after>".
+ *                   "DROP <ms> <frames dropped> <stream length after>",
+ *                   "REWIND <ms> <frames taken back> <stream length after>" (snd_pcm_rewind;
+ *                   SIM_NO_REWIND=1 makes it refuse, as some sound systems do).
  *   - SIM_OPEN_MS: how long opening the device takes (default 0).
  *
  * It also logs every frame Peep uploads to the X server, and when it hides or
@@ -140,6 +142,31 @@ int snd_pcm_delay(snd_pcm_t *p, snd_pcm_sframes_t *d)
     *d = queued();
     pthread_mutex_unlock(&mu);
     return 0;
+}
+
+snd_pcm_sframes_t snd_pcm_rewindable(snd_pcm_t *p)
+{
+    if (getenv("SIM_NO_REWIND")) return 0;
+    pthread_mutex_lock(&mu);
+    long r = ts0 ? queued() : 0;
+    pthread_mutex_unlock(&mu);
+    return r;
+}
+
+snd_pcm_sframes_t snd_pcm_rewind(snd_pcm_t *p, snd_pcm_uframes_t n)
+{
+    if (getenv("SIM_NO_REWIND")) return 0;
+    pthread_mutex_lock(&mu);
+    long q = queued();
+    if ((long)n > q) n = q;
+    heard_len -= n;
+    wr -= n;
+    if (heard_fd >= 0 && ftruncate(heard_fd, heard_len * 4) < 0) { }
+    long after = heard_len;
+    pthread_mutex_unlock(&mu);
+    char b[96];
+    put(log_fd, b, snprintf(b, sizeof b, "REWIND %.3f %ld %ld\n", now(), (long)n, after));
+    return n;
 }
 
 int snd_pcm_drop(snd_pcm_t *p)

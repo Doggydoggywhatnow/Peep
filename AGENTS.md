@@ -78,8 +78,8 @@ sound card or window manager; see `tests/README.md`.
 * **`xmm6`-`xmm15` are callee-saved on Windows.** Use `xmm0`-`xmm5` in leaf
   code or save and restore the others.
 * Stack arguments: use `SARG(n)` / `SET5` / `SET6`, never raw offsets.
-* The platform layer is the `plat_*` functions (audio, map file, thread,
-  time, wake). Behaviour must change in `linux.asm` and `win32.asm` together.
+* The platform layer is the `plat_*` functions (audio incl. `plat_audio_rewind`, map file,
+  thread, time, wake). Behaviour must change in `linux.asm` and `win32.asm` together.
 
 ## Threads and shared state
 
@@ -92,6 +92,10 @@ sound card or window manager; see `tests/README.md`.
 * `cmd_seek`: the UI adds, the player subtracts *after* moving `st_pos`; the
   clock shows `st_pos + cmd_seek` (`disp_pos`), so keys register instantly
   and the display never jumps back. Keep that order.
+* Commands never drop the device queue when it can rewind (`snd_pcm_rewind`): drop, Next,
+  Previous and volume take back the unplayed audio (`cut_track`, the volume block) and keep the
+  device running. Seek, pause and previous-restarts still `plat_audio_flush`. Windows (`waveOut`)
+  cannot rewind, so `plat_audio_rewind` returns 0 there and the old flush path runs.
 * Redraws are scheduled, not polled: `core_next_wake` / `core_tick_needed`.
   While paused Peep must not wake at all.
 

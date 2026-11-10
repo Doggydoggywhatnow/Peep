@@ -26,7 +26,7 @@ extern XUngrabPointer
 extern XSyncQueryExtension, XSyncInitialize, XSyncCreateCounter, XSyncSetCounter
 extern snd_pcm_open, snd_pcm_set_params, snd_pcm_writei, snd_pcm_recover
 extern snd_pcm_drop, snd_pcm_prepare, snd_pcm_drain, snd_pcm_close, snd_pcm_delay
-extern snd_pcm_avail_update, snd_pcm_wait, snd_pcm_state
+extern snd_pcm_avail_update, snd_pcm_wait, snd_pcm_state, snd_pcm_rewindable, snd_pcm_rewind
 extern malloc, free, open, close, lseek, mmap, munmap, opendir, readdir
 extern closedir, strlen, strcasecmp, usleep, pthread_create, pthread_join, poll, write, _exit
 %ifdef MUSL
@@ -36,7 +36,7 @@ extern pipe2, read, getenv, clock_gettime
 
 global main
 global plat_audio_open, plat_audio_write, plat_audio_flush, plat_audio_close
-global plat_audio_queued, plat_audio_wait
+global plat_audio_queued, plat_audio_wait, plat_audio_rewind
 global plat_map, plat_unmap, plat_sleep, plat_title, plat_cmp
 global plat_wake, plat_ms, plat_font_scan, plat_font_dir
 global plat_thread, plat_join
@@ -1559,7 +1559,7 @@ FUNC plat_audio_open, 0                ; (rate) -> 0 ok
     mov  A4, 2                         ; stereo
     mov  A5d, ebx
     mov  A6, 1                         ; allow resampling
-    mov  qword SARG(7), 100000         ; 100 ms latency
+    mov  qword SARG(7), 250000         ; 250 ms: nothing waits on it (commands take audio back)
     call snd_pcm_set_params
     test eax, eax
     js   .close
@@ -1644,6 +1644,32 @@ FUNC plat_audio_queued, 16
     jns  .r
     xor  ebx, ebx
 .r: mov  rax, rbx
+    RET_
+
+; plat_audio_rewind(keep, max) -> rax: take back up to max frames the device has not
+; played yet, always leaving keep frames ahead of the play point. 0: none (the device
+; cannot, is not running, or has nothing to spare).
+FUNC plat_audio_rewind, 0
+    ARGS rbx, r12
+    xor  r13d, r13d
+    mov  A1, [pcm]
+    test A1, A1
+    jz   .r
+    call snd_pcm_rewindable
+    sub  rax, rbx                      ; errors are negative: they end up here too
+    jle  .r
+    cmp  rax, r12
+    jle  .n
+    mov  rax, r12
+.n: test rax, rax
+    jle  .r
+    mov  A1, [pcm]
+    mov  A2, rax
+    call snd_pcm_rewind
+    test rax, rax
+    jle  .r
+    mov  r13, rax
+.r: mov  rax, r13
     RET_
 
 FUNC plat_audio_close, 0               ; (drain)

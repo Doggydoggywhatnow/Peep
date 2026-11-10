@@ -13,6 +13,7 @@
  *   drive pause plain|seek     pause/resume (optionally seeking while paused)
  *   drive seekkeys             the arrow keys: +10 s, -10 s, quick presses, the start
 
+ *   drive keyat <delay ms> <down|up|n|p|right|left|space>   one key after a delay; marks KEY
  *   drive dropfile <delay ms> <path>   drag a file onto Peep (XDND) after a delay; marks DROP
  *   drive keyeff <pid>         every key once, tagged, for measuring key-to-screen and key-to-audio times
  *   drive rendereff            fade, resize, steady redraw and fullscreen, tagged, for measuring drawing
@@ -729,6 +730,21 @@ static void dnd_msg(Window sw, Atom type, long l1, long l2, long l3, long l4)
     XSendEvent(d, w, 0, NoEventMask, &e);
     XSync(d, 0);
 }
+static void cmd_keyat(int delay, const char *name)
+{
+    static const struct { const char *n; KeySym k; } t[] = { { "down", XK_Down }, { "up", XK_Up }, { "n", XK_n },
+        { "p", XK_p }, { "right", XK_Right }, { "left", XK_Left }, { "space", XK_space } };
+    need_window();
+    ms(delay);
+    for (unsigned i = 0; i < sizeof t / sizeof *t; i++)
+        if (!strcmp(t[i].n, name)) {
+            mark("PROGLOG", "MARK", "KEY");
+            mark("LATLOG", "MARK", "KEY");
+            key(t[i].k);
+        }
+    ms(900);
+    key(XK_q);
+}
 static void cmd_dropfile(int delay, const char *path)
 {
     need_window();
@@ -857,6 +873,7 @@ int main(int argc, char **argv)
     else if (!strcmp(c, "rendereff")) cmd_rendereff();
     else if (!strcmp(c, "spamkeys") && argc > 4) cmd_spamkeys(atoi(argv[2]), atoi(argv[3]), atoi(argv[4]));
     else if (!strcmp(c, "spamtracks") && argc > 2) cmd_spamtracks(argv[2]);
+    else if (!strcmp(c, "keyat") && argc > 3) cmd_keyat(atoi(argv[2]), argv[3]);
     else if (!strcmp(c, "dropfile") && argc > 3) cmd_dropfile(atoi(argv[2]), argv[3]);
     else if (!strcmp(c, "seekcost")) cmd_seekcost();
     else if (!strcmp(c, "seekaudio")) cmd_seekaudio();

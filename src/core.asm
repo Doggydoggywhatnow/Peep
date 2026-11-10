@@ -20,6 +20,7 @@ extern plat_audio_write     ; (stereo_s16_buf, frames)
 extern plat_audio_flush     ; ()
 extern plat_audio_close     ; (drain)
 extern plat_audio_queued    ; () -> rax frames written but not yet heard
+extern plat_audio_rewind    ; (keep, max) -> rax frames taken back from the queue (0: cannot)
 extern plat_audio_wait      ; () -> eax 1 = room for a chunk, 0 = not yet (waits a couple of ms)
 extern plat_map             ; (path, &len) -> rax ptr | 0
 extern plat_unmap           ; (ptr, len)
@@ -64,6 +65,8 @@ cmd_seek      dd 0          ; seconds to seek (+/-), accumulated; the UI shows
 seek_taken    dd 0          ; the part of cmd_seek being carried out
 pause_done    dd 0          ; the queued audio was dropped for this pause
 mix_gain      dd -1         ; gain at the end of the last chunk (-1: none yet)
+vol_seen      dd 20         ; the g_volstep the queued audio was mixed at
+KEEP          equ 512       ; frames never taken back from the device (~11 ms ahead of the speaker)
 art_thr       dq 0          ; cover-decoding thread, 0 when none
 job_info      dq 0          ; its track info
 job_buf       dq 0          ; its copy of the picture bytes
@@ -522,6 +525,65 @@ FUNC mix, 0
     jmp  .rl
 .d: RET_
 
+; cut_track() -> eax 1 if the track that is playing was ended cleanly, 0 if the device
+; cannot take audio back (the caller then flushes it). The audio the speaker has not
+; played yet, beyond KEEP frames, is taken back; the next few milliseconds of the track
+; are decoded again and written up to their quietest frame, so the track stops where its
+; wave is nearly at rest instead of in mid-swing. The audio is not changed, only ended a
+; little early, and the device keeps running (no drop, no restart, no click).
+FUNC cut_track, 0
+    xor  r12d, r12d
+    mov  A1, KEEP
+    mov  A2, [st_pos]                 ; never reach back into the previous track
+    call plat_audio_rewind
+    test rax, rax
+    jle  .r
+    mov  rbx, [st_pos]
+    sub  rbx, rax
+    lea  A1, [g_peep]
+    mov  A2, rbx
+    call peep_seek
+    mov  [st_pos], rbx
+    inc  r12d
+    lea  A1, [g_peep]
+    lea  A2, [decbuf]
+    mov  A3, 256                      ; ~6 ms at 44.1 kHz
+    call peep_fill
+    test rax, rax
+    jz   .r
+    mov  rbx, rax
+    lea  r8, [decbuf]
+    xor  r10d, r10d
+    xor  r11d, r11d
+    mov  r9d, 0x7fffffff
+.q: movsx eax, word [r8 + r10*4]
+    mov  edx, eax
+    sar  edx, 31
+    xor  eax, edx
+    sub  eax, edx
+    movsx ecx, word [r8 + r10*4 + 2]
+    mov  edx, ecx
+    sar  edx, 31
+    xor  ecx, edx
+    sub  ecx, edx
+    add  eax, ecx
+    cmp  eax, r9d
+    jae  .n
+    mov  r9d, eax
+    mov  r11d, r10d
+.n: inc  r10d
+    cmp  r10, rbx
+    jb   .q
+    lea  rbx, [r11 + 1]               ; the frames up to and including the quietest
+    mov  A1, rbx
+    call mix
+    lea  A1, [outbuf]
+    mov  A2, rbx
+    call plat_audio_write
+    add  [st_pos], rbx
+.r: mov  eax, r12d
+    RET_
+
 ; play_track(): returns when the track ends or is interrupted
 FUNC play_track, 0
 .loop:
@@ -569,7 +631,9 @@ FUNC play_track, 0
     jg   .loop                        ; Next on the last track: nothing to do,
 .dk3:                                 ; and the music carries on
     mov  [cur_idx], eax
+    cmp  dword [g_paused], 0
     mov  dword [g_paused], 0
+    jne  .flush                       ; was paused: nothing playing to end cleanly
     jmp  .flushout
 .noskip:
     ; --- seek -------------------------------------------------------------
@@ -631,11 +695,27 @@ FUNC play_track, 0
     call plat_wake                    ; redraw with the real position
 .noseek:
     ; --- volume -----------------------------------------------------------
-    ; Nothing to do: a volume key only sets g_volstep, and mix() glides to it over
-    ; the next chunk. (Dropping the queued audio so a lone press is heard at once
-    ; used to be done here; on a real device that stops and restarts the stream,
-    ; which is a glitch of its own. The change is heard within the device buffer,
-    ; ~100 ms, and never interrupts the sound.)
+    ; The queued audio was mixed at the old volume. Take it back and decode it
+    ; again: mix() glides to the new gain, so the key is heard within ~11 ms with
+    ; no drop and no restart. If the device cannot take audio back, the change
+    ; is heard when the queue has played.
+    mov  eax, [g_volstep]
+    cmp  eax, [vol_seen]
+    je   .novol
+    mov  [vol_seen], eax
+    cmp  dword [g_paused], 0
+    jne  .novol
+    mov  A1, KEEP
+    mov  A2, [st_pos]
+    call plat_audio_rewind
+    test rax, rax
+    jle  .novol
+    mov  rbx, [st_pos]
+    sub  rbx, rax
+    lea  A1, [g_peep]
+    mov  A2, rbx
+    call peep_seek
+    mov  [st_pos], rbx
 .novol:
     cmp  dword [g_paused], 0
     je   .play
@@ -688,65 +768,14 @@ FUNC play_track, 0
 .ended:
     inc  dword [cur_idx]
     RET_
-.newlist:
-    ; New files were dropped on the window. Stop the track that is playing, and start
-    ; the new one at once, without a click: the queued audio is thrown away, then the
-    ; next few milliseconds the listener would have heard are decoded again and cut at
-    ; their quietest frame, so the old track ends where its wave is nearly at rest
-    ; instead of in mid-swing. The audio is not changed, only ended a little early.
-    cmp  dword [g_paused], 0
-    jne  .flushout
-    call plat_audio_queued
-    test rax, rax
-    jle  .flushout
-    mov  rbx, [st_pos]
-    sub  rbx, rax                     ; the frame being heard now
-    jns  .nl1
-    xor  ebx, ebx
-.nl1:
-    call plat_audio_flush
-    lea  A1, [g_peep]
-    mov  A2, rbx
-    call peep_seek
-    lea  A1, [g_peep]
-    lea  A2, [decbuf]
-    mov  A3, 256                      ; ~6 ms at 44.1 kHz
-    call peep_fill
-    test rax, rax
-    jz   .out
-    mov  rbx, rax
-    lea  r8, [decbuf]
-    xor  r10d, r10d
-    xor  r11d, r11d
-    mov  r9d, 0x7fffffff
-.nl2:
-    movsx eax, word [r8 + r10*4]
-    mov  edx, eax
-    sar  edx, 31
-    xor  eax, edx
-    sub  eax, edx
-    movsx ecx, word [r8 + r10*4 + 2]
-    mov  edx, ecx
-    sar  edx, 31
-    xor  ecx, edx
-    sub  ecx, edx
-    add  eax, ecx
-    cmp  eax, r9d
-    jae  .nl3
-    mov  r9d, eax
-    mov  r11d, r10d
-.nl3:
-    inc  r10d
-    cmp  r10, rbx
-    jb   .nl2
-    lea  rbx, [r11 + 1]               ; the frames up to and including the quietest
-    mov  A1, rbx
-    call mix
-    lea  A1, [outbuf]
-    mov  A2, rbx
-    call plat_audio_write
-    jmp  .out
+.newlist:                             ; new files were dropped on the window
 .flushout:
+    cmp  dword [g_paused], 0          ; paused: the queue was already dropped
+    jne  .flush
+    call cut_track
+    test eax, eax
+    jnz  .out
+.flush:
     call plat_audio_flush
 .out:
     RET_
