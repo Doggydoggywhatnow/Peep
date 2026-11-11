@@ -14,7 +14,7 @@ extern core_key, core_render, g_quit
 extern core_take_info, core_target_size, core_note_size, core_art_aspect
 extern core_next_wake, core_click, core_hover, core_tick_needed
 extern core_set_fullscreen, core_motion, core_cursor_hidden
-extern start_player, parse_uris, wake_fd, wake_buf, plat_ms
+extern start_player, parse_uris, wake_fd, wake_buf, plat_ms, drop_append
 extern socket, connect, sendmsg, recvmsg, memfd_create, ftruncate, mmap, munmap
 extern poll, read, write, close, getenv, pipe2, malloc, free, memmove, _exit
 
@@ -80,12 +80,13 @@ s_nl        db 10
 
 ; the keys Peep knows, by the name the keymap gives them (as XLookupKeysym
 ; does on X11), what each does, and where it is when there is no keymap (QWERTY)
-NKEYS       equ 15
+NKEYS       equ 17
 knames      db "space", 0, "Left", 0, "Right", 0, "Up", 0, "Down", 0, "Next", 0, "Prior", 0
-            db "Tab", 0, "Escape", 0, "n", 0, "p", 0, "g", 0, "v", 0, "f", 0, "q", 0
+            db "Tab", 0, "Escape", 0, "n", 0, "p", 0, "g", 0, "v", 0, "f", 0, "q", 0, "j", 0, "h", 0
 kact        db K_PAUSE, K_SEEKBACK, K_SEEKFWD, K_VOLUP, K_VOLDN, K_NEXT, K_PREV
             db KX_TAB, KX_ESC, K_NEXT, K_PREV, K_FONT, K_VERSION, KX_FS, KX_QUIT
-kdef        dw 57, 105, 106, 103, 108, 109, 104, 15, 1, 49, 25, 34, 47, 33, 16
+            db K_FONTUP, K_FONTDN
+kdef        dw 57, 105, 106, 103, 108, 109, 104, 15, 1, 49, 25, 34, 47, 33, 16, 36, 35
 KX_TAB      equ 100
 KX_ESC      equ 101
 KX_FS       equ 102
@@ -1163,6 +1164,8 @@ FUNC wl_drop, 16
     jb   .rd
 .eof:
     mov  byte [r12 + r13], 0
+    mov  eax, [shift]                  ; Shift held while dragging: add to the playlist
+    mov  [drop_append], eax
     mov  A1, r12
     call parse_uris
     mov  A1, r12

@@ -7,7 +7,7 @@
 default rel
 %include "abi.inc"
 
-extern core_list_new, core_list_add, core_list_free, core_publish
+extern core_list_new, core_list_add, core_list_free, core_publish, drop_append
 extern core_player, core_key, core_render, g_quit, g_ui
 extern core_take_info, core_target_size, core_note_size, core_art_aspect
 extern core_next_wake, core_click, core_hover, core_tick_needed
@@ -494,6 +494,10 @@ FUNC wndproc, 80                       ; PAINTSTRUCT (72)
     jmp  .dl
 .dd:mov  A1, r13
     call DragFinish
+    mov  A1, 0x10                      ; VK_SHIFT held: add to the playlist
+    call GetKeyState
+    shr  eax, 15
+    mov  [drop_append], eax
     mov  A1, r15
     call core_publish
     jmp  .inval
@@ -525,6 +529,10 @@ FUNC wndproc, 80                       ; PAINTSTRUCT (72)
     je   .kfont                        ; G: next font
     cmp  eax, 'V'
     je   .kver
+    cmp  eax, 'J'
+    je   .kfontup                      ; J: larger text
+    cmp  eax, 'H'
+    je   .kfontdn                      ; H: smaller text
     cmp  eax, 'F'
     je   .kfs                          ; F: fullscreen
     cmp  eax, 0x1B                     ; Esc leaves fullscreen
@@ -555,6 +563,10 @@ FUNC wndproc, 80                       ; PAINTSTRUCT (72)
     mov  ecx, K_BLANK
     jmp  .kcore
 .kfont:  mov ecx, K_FONT
+    jmp  .kcore
+.kfontup: mov ecx, K_FONTUP
+    jmp  .kcore
+.kfontdn: mov ecx, K_FONTDN
     jmp  .kcore
 .kver:   mov ecx, K_VERSION
 .kcore:

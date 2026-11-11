@@ -1,4 +1,4 @@
-# Peep 0.6.1
+# Peep 0.6.2
 
 A music player that is just a screen.
 
@@ -15,12 +15,12 @@ writes to disk.
 
 | Download | Platform |
 |---|---|
-| [`Peep-0.6.1-x86_64.AppImage`](releases/Peep-0.6.1-x86_64.AppImage) | Linux x86-64 |
-| [`peep_0.6.1_amd64.deb`](releases/peep_0.6.1_amd64.deb) | Ubuntu 22.04+ / Debian 12+ (x86-64) |
-| [`Peep-0.6.1.exe`](releases/Peep-0.6.1.exe) | Windows x64 |
-| [`Peep-0.6.1-x86_64-wayland`](releases/Peep-0.6.1-x86_64-wayland) | Linux x86-64, **Wayland** (GNOME, KDE, sway, ...): one file, `chmod +x` and run. Needs no X11 |
-| [`Peep-0.6.1-x86_64-wayland-musl`](releases/Peep-0.6.1-x86_64-wayland-musl) | The Wayland build for musl libc |
-| [`Peep-0.6.1-x86_64-musl`](releases/Peep-0.6.1-x86_64-musl) | Linux x86-64 with musl libc (Void musl, Alpine): one file, `chmod +x` and run |
+| [`Peep-0.6.2-x86_64.AppImage`](releases/Peep-0.6.2-x86_64.AppImage) | Linux x86-64 |
+| [`peep_0.6.2_amd64.deb`](releases/peep_0.6.2_amd64.deb) | Ubuntu 22.04+ / Debian 12+ (x86-64) |
+| [`Peep-0.6.2.exe`](releases/Peep-0.6.2.exe) | Windows x64 |
+| [`Peep-0.6.2-x86_64-wayland`](releases/Peep-0.6.2-x86_64-wayland) | Linux x86-64, **Wayland** (GNOME, KDE, sway, ...): one file, `chmod +x` and run. Needs no X11 |
+| [`Peep-0.6.2-x86_64-wayland-musl`](releases/Peep-0.6.2-x86_64-wayland-musl) | The Wayland build for musl libc |
+| [`Peep-0.6.2-x86_64-musl`](releases/Peep-0.6.2-x86_64-musl) | Linux x86-64 with musl libc (Void musl, Alpine): one file, `chmod +x` and run |
 
 ## Philosophy
 
@@ -52,7 +52,8 @@ ratings, recommendations. Peep is built around *listening* to it.
 
 * **Drag & drop** a folder or files onto the window, or *Open with* Peep.
   Folders are scanned recursively for `mp3 flac ogg oga wav` and played in
-  path order. A new drop replaces the queue.
+  path order. A new drop replaces the queue; **hold Shift while dropping** to add
+  the files to the end of it instead (the music keeps playing).
 * **Cover art** is read from the files' tags: ID3v2 (APIC/PIC), FLAC
   PICTURE blocks, and Ogg Vorbis `METADATA_BLOCK_PICTURE` or `COVERART`.
   The front cover wins when a file has several pictures. JPEG, PNG, BMP and
@@ -70,6 +71,7 @@ ratings, recommendations. Peep is built around *listening* to it.
 | Tab | info and controls on / off (shown while the pointer is over the window) |
 | Shift+Tab | blank: black screen, music continues (again to restore) |
 | G | next font (cycles through the fonts folder, then back to Default) |
+| J / H | text larger / smaller (50% to 200%, until you quit; the built-in font changes in whole steps) |
 | V | show the Peep version in the top-left box for 2 seconds |
 | Space | pause / resume |
 | ← / → | seek −10 s / +10 s |

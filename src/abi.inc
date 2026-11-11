@@ -138,6 +138,8 @@ PL_SIZE      equ 24
 K_BLANK      equ 9             ; Shift+Tab: black screen, keep playing
 K_FONT       equ 10            ; F: cycle fonts
 K_VERSION    equ 11            ; V: show the version for 2 s
+K_FONTUP     equ 12            ; J: larger text
+K_FONTDN     equ 13            ; H: smaller text
 
 ; track info published by the player thread to the UI thread
 INFO_TITLE   equ 0             ; UTF-8, 256 bytes

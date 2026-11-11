@@ -14,7 +14,9 @@
  *   drive seekkeys             the arrow keys: +10 s, -10 s, quick presses, the start
 
  *   drive keyat <delay ms> <down|up|n|p|right|left|space>   one key after a delay; marks KEY
- *   drive dropfile <delay ms> <path>   drag a file onto Peep (XDND) after a delay; marks DROP
+ *   drive dropfile <delay ms> <path> [shift [extra ms before quitting]]   drag a file onto Peep (XDND) after a delay, with Shift held if
+ *                              asked (a real fake key through XTest); marks DROP
+ *   drive textsize <ppm prefix>   screenshots after J (larger text) and after H (smaller)
  *   drive keyeff <pid>         every key once, tagged, for measuring key-to-screen and key-to-audio times
  *   drive rendereff            fade, resize, steady redraw and fullscreen, tagged, for measuring drawing
  *   drive spamkeys <pid> <n> <gap_us>   hold-down-style spam of each key, tagged, to measure lag and side effects
@@ -37,6 +39,7 @@
 #include <X11/Xutil.h>
 #include <X11/extensions/sync.h>
 #include <X11/keysym.h>
+#include <dlfcn.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -745,10 +748,24 @@ static void cmd_keyat(int delay, const char *name)
     ms(900);
     key(XK_q);
 }
-static void cmd_dropfile(int delay, const char *path)
+static void shift_key(int down)
+{
+    static int (*fake)(Display *, unsigned, int, unsigned long);
+    static int tried;
+    if (!tried) {
+        tried = 1;
+        void *h = dlopen("libXtst.so.6", RTLD_NOW);
+        if (h) fake = (int (*)(Display *, unsigned, int, unsigned long))dlsym(h, "XTestFakeKeyEvent");
+    }
+    if (!fake) { puts("error=no XTest"); exit(3); }
+    fake(d, XKeysymToKeycode(d, XK_Shift_L), down, 0);
+    XSync(d, 0);
+}
+static void cmd_dropfile(int delay, const char *path, int shift, int extra)
 {
     need_window();
     ms(delay);
+    if (shift) { shift_key(1); ms(50); }
     Window sw = XCreateSimpleWindow(d, R, 0, 0, 10, 10, 0, 0, 0);
     Atom sel = XInternAtom(d, "XdndSelection", 0), uri = XInternAtom(d, "text/uri-list", 0),
          enter = XInternAtom(d, "XdndEnter", 0), pos = XInternAtom(d, "XdndPosition", 0),
@@ -785,6 +802,26 @@ static void cmd_dropfile(int delay, const char *path)
         }
         usleep(1000);
     }
+    if (shift) shift_key(0);
+    ms(extra);
+    key(XK_q);
+}
+
+static void cmd_textsize(const char *prefix)
+{
+    char out[512];
+    need_window();
+    ms(1500);
+    key(XK_Tab);
+    inside();
+    ms(500);
+    snprintf(out, sizeof out, "%s_0.ppm", prefix); shot(out);
+    for (int i = 0; i < 3; i++) { key(XK_j); ms(150); }
+    ms(2300);
+    snprintf(out, sizeof out, "%s_up.ppm", prefix); shot(out);
+    for (int i = 0; i < 8; i++) { key(XK_h); ms(150); }
+    ms(2300);
+    snprintf(out, sizeof out, "%s_down.ppm", prefix); shot(out);
     key(XK_q);
 }
 
@@ -874,7 +911,8 @@ int main(int argc, char **argv)
     else if (!strcmp(c, "spamkeys") && argc > 4) cmd_spamkeys(atoi(argv[2]), atoi(argv[3]), atoi(argv[4]));
     else if (!strcmp(c, "spamtracks") && argc > 2) cmd_spamtracks(argv[2]);
     else if (!strcmp(c, "keyat") && argc > 3) cmd_keyat(atoi(argv[2]), argv[3]);
-    else if (!strcmp(c, "dropfile") && argc > 3) cmd_dropfile(atoi(argv[2]), argv[3]);
+    else if (!strcmp(c, "dropfile") && argc > 3) cmd_dropfile(atoi(argv[2]), argv[3], argc > 4 && !strcmp(argv[4], "shift"), argc > 5 ? atoi(argv[5]) : 0);
+    else if (!strcmp(c, "textsize") && argc > 2) cmd_textsize(argv[2]);
     else if (!strcmp(c, "seekcost")) cmd_seekcost();
     else if (!strcmp(c, "seekaudio")) cmd_seekaudio();
     else if (!strcmp(c, "tick")) cmd_tick();

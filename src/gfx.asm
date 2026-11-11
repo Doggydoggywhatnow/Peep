@@ -25,7 +25,7 @@ extern font_glyph, font_glyph_free
 
 global core_render, core_click, core_take_info, core_target_size
 global core_note_size, core_art_aspect, core_next_wake, gfx_font_cycle
-global core_hover, core_tick_needed, gfx_show_version
+global core_hover, core_tick_needed, gfx_show_version, gfx_font_size
 global core_set_fullscreen, core_motion, core_cursor_hidden
 
 ; colours (0x00RRGGBB)
@@ -61,6 +61,12 @@ s_vol       db "vol ", 0
 s_dots      db "...", 0
 s_q         db "--:--", 0
 s_fontpfx   db "Font: ", 0
+s_textsz    db "Text size ", 0
+s_pcts      db "%", 0
+font_ix     dd 5                ; index into font_tab: 100%
+font_pct    dd 100              ; text size, percent (J larger, H smaller)
+font_tab    dd 50, 60, 70, 80, 90, 100, 115, 130, 150, 175, 200
+FONT_N      equ 11
 ; PEEP_VERSION comes from the README title (see the Makefile), so the version
 ; Peep shows can't drift from the release.
 %ifndef PEEP_VERSION
@@ -321,6 +327,18 @@ bscale:
     shr  eax, 3
     jnz  .ok
     mov  eax, 1
+.ok:ret
+
+; fscale: a text size in px -> the same scaled by the user's text size (J / H). Leaf.
+fscale:
+    imul eax, [font_pct]
+    add  eax, 50
+    xor  edx, edx
+    mov  ecx, 100
+    div  ecx
+    cmp  eax, 5
+    jae  .ok
+    mov  eax, 5
 .ok:ret
 
 ; text_h(px) -> eax rendered line height
@@ -1157,6 +1175,15 @@ FUNC overlay, 64
     shr  eax, 2
     mov  [L(16)], eax                 ; small px: 3u/4, so the time row text
                                       ; fits beside the buttons at every size
+    mov  eax, [L(8)]                  ; the user's text size (J / H) on top
+    call fscale
+    mov  [L(8)], eax
+    mov  eax, [L(12)]
+    call fscale
+    mov  [L(12)], eax
+    mov  eax, [L(16)]
+    call fscale
+    mov  [L(16)], eax
     cmp  dword [st_count], 0
     jne  .player
     ; ---- nothing loaded yet
@@ -2247,6 +2274,37 @@ FUNC gfx_show_version, 0
     mov  byte [dlg2], 0                ; one line
     lea  A1, [dlg1]
     lea  A2, [s_version]
+    call s_cat
+    call plat_ms
+    add  rax, 2000
+    mov  [dlg_until], rax
+    RET_
+
+; gfx_font_size(dir): J (+1) / H (-1) — text 10 to 15% larger or smaller (50% to 200%),
+; with a 2 s notice. The glyph cache is keyed by size, so nothing needs flushing.
+FUNC gfx_font_size, 0
+    mov  eax, [font_ix]
+    add  eax, A1d
+    jns  .lo
+    xor  eax, eax
+.lo:cmp  eax, FONT_N - 1
+    jbe  .set
+    mov  eax, FONT_N - 1
+.set:
+    mov  [font_ix], eax
+    lea  rcx, [font_tab]
+    mov  ebx, [rcx + rax*4]
+    mov  [font_pct], ebx
+    mov  byte [dlg2], 0
+    lea  A1, [dlg1]
+    lea  A2, [s_textsz]
+    call s_cat
+    mov  A1, rax
+    mov  A2d, ebx
+    xor  A3d, A3d
+    call s_num
+    mov  A1, rax
+    lea  A2, [s_pcts]
     call s_cat
     call plat_ms
     add  rax, 2000

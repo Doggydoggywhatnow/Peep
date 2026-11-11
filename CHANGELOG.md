@@ -2,6 +2,21 @@
 
 All notable changes to Peep.
 
+## 0.6.2
+
+### Added
+- **A queue: hold Shift while dropping files** to add them to the end of the playlist
+  instead of replacing it. The music keeps playing, no cut and no gap, and the new
+  files play after the current list (sorted by path among themselves). A plain drop
+  still replaces everything. On Linux (X11) and Windows this reads the Shift key at
+  the moment of the drop; on Wayland it relies on the compositor passing the modifier
+  to Peep during the drag, which may vary.
+- **Text size: J makes the text larger, H smaller**, in steps from 50% to 200%, with a
+  short "Text size 115%" notice. It applies to the title, artist and time text and
+  costs one redraw per press. The size is not remembered between runs. The built-in
+  8x8 font can only scale in whole multiples, so its steps are coarser than a
+  TrueType font's.
+
 ## 0.6.1
 
 ### Added

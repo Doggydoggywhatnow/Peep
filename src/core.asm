@@ -40,12 +40,12 @@ extern codec_open, codec_read, codec_seek, codec_close   ; the C shim (src/codec
 %endif
 
 global core_list_new, core_list_add, core_list_free, core_list_sort
-global core_publish, core_player, core_key
+global core_publish, core_player, core_key, drop_append
 global g_quit, g_ui, g_blank, g_paused, g_volstep
 global cur_idx, st_count, st_playing, st_rate, st_pos, st_total, cmd_seek
 global pending_info, info_free, art_unref
 extern meta_parse, meta_art_ptr, meta_art_len, meta_done
-extern gfx_font_cycle, gfx_show_version
+extern gfx_font_cycle, gfx_show_version, gfx_font_size
 %ifndef PURE
 extern image_decode, image_free
 %endif
@@ -53,6 +53,8 @@ extern image_decode, image_free
 section .data
 align 8
 pending_list  dq 0          ; new playlist waiting for the player thread
+pending_append dq 0         ; files dropped with Shift held: to go on the end of the playlist
+drop_append   dd 0          ; set by the window code just before core_publish: this drop is an append
 pending_info  dq 0          ; new track info waiting for the UI thread
 g_quit        dd 0
 g_paused      dd 0
@@ -196,8 +198,31 @@ FUNC core_list_sort, 0
     call qsort
 .r: RET_
 
+; core_list_append(dst, src): add copies of src's paths to the end of dst
+FUNC core_list_append, 0
+    ARGS rbx, r12
+    xor  r13d, r13d
+.l: cmp  r13, [r12 + PL_COUNT]
+    jae  .r
+    mov  rax, [r12 + PL_ITEMS]
+    mov  r14, [rax + r13*8]
+    xor  r15d, r15d
+.n: cmp  byte [r14 + r15], 0
+    je   .e
+    inc  r15
+    jmp  .n
+.e: inc  r15                          ; with the NUL
+    mov  A1, rbx
+    mov  A2, r14
+    mov  A3, r15
+    call core_list_add
+    inc  r13
+    jmp  .l
+.r: RET_
+
 ; core_publish(list): hand a fresh playlist to the player. Empty lists are
-; discarded so an accidental drop of non-audio never stops the music.
+; discarded so an accidental drop of non-audio never stops the music. A drop made
+; with Shift held (drop_append) goes on the end of what is playing instead.
 FUNC core_publish, 0
     ARGS rbx
     test rbx, rbx
@@ -208,6 +233,30 @@ FUNC core_publish, 0
     call core_list_free
     RET_
 .go:
+    xor  eax, eax
+    xchg eax, [drop_append]
+    test eax, eax
+    jz   .plain
+    cmp  qword [cur_list], 0          ; nothing playing yet: a drop is a drop
+    je   .plain
+    mov  A1, rbx
+    call core_list_sort
+    xor  eax, eax
+    xchg rax, [pending_append]        ; an append the player has not taken yet
+    test rax, rax
+    jz   .put
+    mov  r12, rax
+    mov  A1, r12
+    mov  A2, rbx
+    call core_list_append             ; theirs first, then these
+    mov  A1, rbx
+    call core_list_free
+    mov  rbx, r12
+.put:
+    mov  [pending_append], rbx
+    call plat_wake
+    RET_
+.plain:
     mov  A1, rbx
     call core_list_sort
     mov  rax, rbx
@@ -1059,6 +1108,24 @@ FUNC core_player, 0
     mov  rax, [rbx + PL_COUNT]
     mov  [st_count], eax
 .nonew:
+    xor  eax, eax
+    xchg rax, [pending_append]
+    test rax, rax
+    jz   .noapp
+    mov  r13, rax                     ; files dropped with Shift held
+    mov  rbx, [cur_list]
+    test rbx, rbx
+    jz   .appfree
+    mov  A1, rbx
+    mov  A2, r13
+    call core_list_append
+    mov  eax, [rbx + PL_COUNT]
+    mov  [st_count], eax
+    call plat_wake                    ; the N/M text changes
+.appfree:
+    mov  A1, r13
+    call core_list_free
+.noapp:
     mov  rbx, [cur_list]
     test rbx, rbx
     jz   .idle
@@ -1196,8 +1263,20 @@ FUNC core_key, 0
     jmp  .yes
 .k11:
     cmp  eax, K_VERSION
-    jne  .no
+    jne  .k12
     call gfx_show_version
+    jmp  .yes
+.k12:
+    cmp  eax, K_FONTUP
+    jne  .k13
+    mov  A1d, 1
+    call gfx_font_size
+    jmp  .yes
+.k13:
+    cmp  eax, K_FONTDN
+    jne  .no
+    mov  A1d, -1
+    call gfx_font_size
 .yes:
     mov  eax, 1
     RET_

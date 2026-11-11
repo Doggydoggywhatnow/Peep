@@ -8,7 +8,7 @@
 default rel
 %include "abi.inc"
 
-extern core_list_new, core_list_add, core_list_free, core_publish
+extern core_list_new, core_list_add, core_list_free, core_publish, drop_append
 extern core_player, core_key, core_render, g_quit, g_ui
 extern core_take_info, core_target_size, core_note_size, core_art_aspect
 extern core_next_wake, core_click, core_hover, core_tick_needed
@@ -23,7 +23,7 @@ extern XPutImage, XFlush, XSendEvent, XConvertSelection, XGetWindowProperty
 extern XFree, XCreateBitmapFromData, XCreatePixmapCursor, XDefineCursor
 extern XUndefineCursor, XResizeWindow, XSetWMNormalHints, XDisplayWidth
 extern XDisplayHeight, XSetWindowBackgroundPixmap
-extern XUngrabPointer
+extern XUngrabPointer, XQueryPointer
 extern XSyncQueryExtension, XSyncInitialize, XSyncCreateCounter, XSyncSetCounter
 %endif
 extern snd_pcm_open, snd_pcm_set_params, snd_pcm_writei, snd_pcm_recover
@@ -169,6 +169,13 @@ fontdir     resb PATHMAX
 wake_fd     resd 2
 wake_buf    resb 64
 pollfds     resq 2
+qp_a        resq 1                 ; XQueryPointer results
+qp_b        resq 1
+qp_c        resq 1
+qp_d        resq 1
+qp_e        resq 1
+qp_f        resq 1
+qp_mask     resd 2
 last_present resq 1               ; when the last frame was drawn (ms)
 cap_ms      resd 1                ; set: a frame is due, wait this long for it
 capped      resd 1
@@ -678,6 +685,10 @@ FUNC on_event, 0
     je   .kfont                        ; G: next font
     cmp  rax, 'v'
     je   .kver
+    cmp  rax, 'j'
+    je   .kfontup                      ; J: larger text
+    cmp  rax, 'h'
+    je   .kfontdn                      ; H: smaller text
     cmp  rax, 'f'
     je   .kfs                          ; F: fullscreen
     cmp  rax, 0xff1b                   ; Escape leaves fullscreen
@@ -707,6 +718,10 @@ FUNC on_event, 0
 .kblank: mov ecx, K_BLANK
     jmp  .kcore
 .kfont:  mov ecx, K_FONT
+    jmp  .kcore
+.kfontup: mov ecx, K_FONTUP
+    jmp  .kcore
+.kfontdn: mov ecx, K_FONTDN
     jmp  .kcore
 .kver:   mov ecx, K_VERSION
 .kcore:
@@ -768,6 +783,23 @@ FUNC on_event, 0
 .c4:cmp  rax, [a_drop]
     jne  .r
     mov  [xdnd_src], rbx
+    ; Shift held while dragging: the files go on the end of the playlist
+    mov  A1, [dpy]
+    mov  A2, [root]
+    lea  A3, [qp_a]
+    lea  A4, [qp_b]
+    lea  A5, [qp_c]
+    lea  A6, [qp_d]
+    lea  rax, [qp_e]
+    mov  SARG(7), rax
+    lea  rax, [qp_f]
+    mov  SARG(8), rax
+    lea  rax, [qp_mask]
+    mov  SARG(9), rax
+    call XQueryPointer
+    mov  eax, [qp_mask]
+    and  eax, 1                        ; ShiftMask
+    mov  [drop_append], eax
     mov  A1, [dpy]
     mov  A2, [a_sel]
     mov  A3, [a_urilist]

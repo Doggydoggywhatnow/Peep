@@ -71,7 +71,7 @@ def build():
     codecs = ROOT / "build" / "codecs.o"
     for out, inputs, cmd in (
         (DRIVE, [TESTS / "drive.c"],
-         ["gcc", *cflags, str(TESTS / "drive.c"), "-o", str(DRIVE), "-lX11", "-lXext"]),
+         ["gcc", *cflags, str(TESTS / "drive.c"), "-o", str(DRIVE), "-lX11", "-lXext", "-ldl"]),
         (SHIM, [TESTS / "shim.c"],
          ["gcc", *cflags, "-shared", "-fPIC", str(TESTS / "shim.c"), "-o", str(SHIM),
           "-ldl", "-lpthread", "-lX11"]),
@@ -1305,6 +1305,48 @@ def drop_clean_cut():
         assert start - marks["DROP"] < 40, "the new file started %.0f ms after the drop" % (start - marks["DROP"])
         worst, latest = max(worst, w), max(latest, start - marks["DROP"])
     return "old track ended at |sample| <= %d of 24000, no queue drop, new one heard %.0f ms after the drop (4 timings)" % (worst, latest)
+
+
+@check
+def queue_append():
+    """Dropping a file with Shift held adds it to the end of the playlist: the playing track is not interrupted
+    (no queue drop, no rewind, its audio untouched) and the dropped one follows it without a gap."""
+    a, b = tone_wav("tone_a3.wav", 440, 3), tone_wav("tone_b.wav", 523)
+    A, B = wav_data(a), wav_data(b)
+    with peep([a]):
+        drive("dropfile", 1000, b, "shift", 4000, timeout=60)
+    prog, marks, drops = read_prog()
+    heard = (LOGS / "heard.raw").read_bytes()
+    assert not [d for d in drops if d[0] >= marks["DROP"]] and not [r for r in REWINDS if r[0] >= marks["DROP"]], \
+        "the playing track was interrupted by an append"
+    assert heard[: len(A)] == A, "the playing track's audio was changed or cut"
+    assert heard[len(A): len(A) + 128] == B[:128], "the appended track did not follow the first one"
+    assert len(heard) > len(A) + 44100, "the appended track did not play"
+    # and a drop without Shift still replaces
+    with peep([a]):
+        drive("dropfile", 1000, b, timeout=60)
+    heard2 = (LOGS / "heard.raw").read_bytes()
+    assert len(heard2) < len(A) + 44100 * 4 * 3 and heard2.find(B[:128]) < len(A) // 2, "a plain drop no longer replaces the list"
+    return "Shift+drop queued the file after a 3 s track with no cut (%.1f s heard, B follows at frame %d)" % (len(heard) / 4 / SR, len(A) // 4)
+
+
+@check
+def text_size():
+    """J makes the text larger and H smaller (50% to 200%): more text pixels after J, fewer after H, and it is quick."""
+    need_pil()
+    from PIL import Image
+    with peep([long_mp3()]):
+        drive("textsize", LOGS / "ts", timeout=60)
+
+    def ink(name):
+        im = Image.open(LOGS / ("ts_%s.ppm" % name)).convert("L")
+        w, h = im.size
+        px = im.crop((0, int(h * 0.55), w, h)).getdata()
+        return sum(1 for v in px if v > 90)
+    n0, nu, nd = ink("0"), ink("up"), ink("down")
+    assert nu > n0 * 1.15, "after three J the text is not larger (%d -> %d bright pixels)" % (n0, nu)
+    assert nd < n0 * 0.9, "after H the text is not smaller than the start (%d vs %d)" % (nd, n0)
+    return "bright text pixels: %d at 100%%, %d after J x3, %d after H x8 (50%%)" % (n0, nu, nd)
 
 
 @check
