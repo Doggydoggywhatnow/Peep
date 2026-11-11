@@ -335,15 +335,15 @@ FUNC peep_open, 0
     jne  .validate
     mov  word [rbx + P_BITS], 16
 
-    ; ---- sanity: 1..8 channels, 1 kHz..1,048,575 Hz (FLAC's whole range) -----
+    ; ---- sanity: 1..8 channels, 1..1,048,575 Hz (FLAC's whole range) -----
 .validate:
     mov  eax, [rbx + P_CH]
     dec  eax
     cmp  eax, 7
     ja   .bad
     mov  eax, [rbx + P_RATE]
-    sub  eax, 1000
-    cmp  eax, 1047575
+    dec  eax
+    cmp  eax, 1048574
     ja   .bad
     mov  eax, 1
     RET_

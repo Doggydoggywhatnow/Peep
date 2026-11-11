@@ -256,7 +256,7 @@ def make_id3(rng):
 def gen_case(rng):
     nch = rng.choice([1, 2, 2, 2, 2, 3, 4, 6, 8])
     bps = rng.choice([4, 8, 12, 16, 16, 16, 16, 20, 24, 25, 27, 31])
-    rate = rng.choice([8000, 11025, 22050, 44100, 44100, 48000, 96000, 192000, 12345, 1000, 655350, 176400, 1000000])
+    rate = rng.choice([8000, 11025, 22050, 44100, 44100, 48000, 96000, 192000, 12345, 1000, 1, 8, 500, 999, 655350, 176400, 1000000])
     variable = rng.random() < .35
     total = rng.choice([0, 1, 2, 5, 15, 16, 17, 100, 1000, 4096, 4097, 9000, 20000, 33000])
     total = max(total, 1) if rng.random() < .97 else total
@@ -275,6 +275,11 @@ def gen_case(rng):
     if variable: minbs, maxbs = min(sz), max(sz)
     else: minbs = maxbs = sz[0] if len(sz) == 1 else bs0
     if not variable and len(sz) > 1: minbs = maxbs = bs0
+    if not variable and len(sz) > 1:                       # what real encoders write: the true minimum (a short last block), or "unknown" (0)
+        q = rng.random()
+        if q < .3: minbs, maxbs = min(sz), max(sz)
+        elif q < .4: minbs = maxbs = 0
+        elif q < .45: minbs, maxbs = 0, bs0
     blocks = [(0, streaminfo(minbs, maxbs, rate, nch, bps, total if rng.random() < .9 else 0))]
     for _ in range(rng.choice([0, 0, 1, 2, 4])):
         blocks.append((rng.choice([1, 2, 3, 4, 6, 5]), bytes(rng.randrange(256) for _ in range(rng.choice([0, 1, 33, 200, 3000])))))

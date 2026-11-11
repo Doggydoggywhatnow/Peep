@@ -2,6 +2,18 @@
 
 All notable changes to Peep.
 
+## Unreleased (freedumb branch)
+
+### Changed
+- **Newest FLAC decoder from lib-Peep `dev`.** Optimised x86-64 decoder: 8-byte bit
+  refill, `lzcnt`/BMI2 loops, an SSE4.1 predictor, a PCLMULQDQ CRC-16, one loop per
+  predictor. Each is chosen by the CPU at run time and falls back to plain code. A
+  300 s stereo file decodes about 25 to 30% faster than with the previous decoder
+  (same machine, alternating runs). Fixes FLAC files whose STREAMINFO block size is 0
+  ("unknown") and seeking in fixed-block-size files whose last block is short.
+  `peep_open` also accepts sample rates from 1 Hz (Peep itself still plays 1,000 Hz
+  and up). The code is 38 KB larger in `flac.o`. Version number not bumped yet.
+
 ## 0.5.1
 
 ### Changed

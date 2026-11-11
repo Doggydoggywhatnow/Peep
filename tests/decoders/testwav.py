@@ -51,6 +51,11 @@ for ch in (1, 2, 3, 6, 8):
             check(f'truncated ch{ch} n{n}', rc == 0 and out == expect(pcm, ch)[:(n - 6) * 4])
 
 good = rng.randint(-1000, 1000, 100).astype('<i2').tobytes()
+for rate in (1, 8, 500, 999, 1000, 1048575):                                   # any rate from 1 Hz is played; the rate does not change the samples
+    pcm = rng.randint(-32768, 32768, 64 * 2).astype('<i2')
+    rc, out = run(riff(fmt(2, rate), chunk(b'data', pcm.tobytes())), '-c', '64')
+    check(f'rate {rate}', rc == 0 and out == expect(pcm, 2))
+rc, out = run(riff(fmt(2, 1048576), chunk(b'data', good)), '-c', '64'); check('rate 1048576 rejected', rc != 0)
 for name, data in (('data before fmt', riff(chunk(b'data', good), fmt())), ('zero channels', riff(fmt(0), chunk(b'data', good))),
                    ('rate 0', riff(fmt(rate=0), chunk(b'data', good))), ('9 channels', riff(fmt(9), chunk(b'data', good))),
                    ('adpcm', riff(fmt(tag=2, bits=4), chunk(b'data', good))),
