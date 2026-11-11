@@ -44,7 +44,10 @@ src/flac.asm    native FLAC decoder (these decoders are from lib-Peep's `dev` br
                 and re-apply them. Tests that came with them are in `tests/decoders/`)
 src/gfx.asm     scaling, overlay, text, hover/fade, clock scheduling
 src/meta.asm    tag parsing (ID3, FLAC, Ogg, WAV)
-src/linux.asm   X11 window, ALSA, drag and drop, resize sync, startup order
+src/linux.asm   X11 window, ALSA, drag and drop, resize sync, startup order; with -DWAYLAND
+                only the shared half (audio, files, threads) for the Wayland build
+src/wayland.asm the Wayland build's window (build/peep-wayland, a separate download, not chosen
+                at run time): the wire protocol over the socket, no libwayland/xkbcommon/X11
 src/win32.asm   Win32 window, waveOut, same behaviours
 src/codecs.c    the only C: decoders, image and font loading, MP3 seek index
 tests/          test suite (see tests/README.md)
@@ -56,6 +59,7 @@ releases/       the current build of each download (replace, don't accumulate)
 
 ```sh
 make            # build/peep
+make wayland    # build/peep-wayland
 make exe        # build/Peep.exe (mingw-w64)
 make appimage RUNTIME=/path/to/runtime-x86_64
 make deb        # version is read from the README's first line
@@ -111,7 +115,8 @@ sound card or window manager; see `tests/README.md`.
 4. Build the three downloads and smoke-test the ones you can: `make exe`,
    `make appimage RUNTIME=...`, `make deb` (install it, run it, remove it).
 5. In `releases/`, `git rm` the previous version's files and add the new ones
-   (`Peep-X.Y.Z-x86_64.AppImage`, `Peep-X.Y.Z.exe`, `peep_X.Y.Z_amd64.deb`).
+   (`Peep-X.Y.Z-x86_64.AppImage`, `Peep-X.Y.Z.exe`, `peep_X.Y.Z_amd64.deb`, `-musl`,
+   `-wayland`, `-wayland-musl`).
 6. Review `git diff --cached --stat` (no build junk, no secrets, no personal
    paths), commit, then push to `main`.
 7. GitHub tags/releases may not be creatable from your environment. If not,
@@ -144,8 +149,11 @@ code before relying on them.
 * Tiling window managers and native Wayland sessions.
 
 **By design or not yet built**
-* Linux is X11 (or XWayland) and ALSA's `default` device only. No native
-  Wayland, no JACK.
+* Linux is X11 (`build/peep`) or Wayland (`build/peep-wayland`, since 0.6.1) and ALSA's
+  `default` device only. No JACK. The Wayland build was run only on sway (headless, virtual
+  input): never on GNOME, KDE or real hardware. Pointer hide/show and the fallback arrow were
+  checked as protocol requests, not seen. It draws at scale 1 (the compositor scales it on
+  HiDPI) and has no title bar where the compositor gives none (GNOME).
 * x86-64 only. No ARM builds and no macOS. The Linux and musl builds compile the C with
   `-O3 -march=x86-64-v2` (`CODEC_CFLAGS_LINUX`), so they need SSE4.2; Windows stays `-Os`.
 * Audio: MP3, FLAC (4 to 31 bit; not 32), Ogg **Vorbis** and WAV (8 to 32-bit PCM and
@@ -185,7 +193,8 @@ propose and ask before building. Your job is engineering and tradeoffs.
 3. **Codec coverage**, if wanted: Opus and M4A/AAC are the usual gaps. Each
    adds C to the shim and size to the binary, so weigh it against the
    Philosophy section.
-4. **Wayland**: XWayland works today; a native backend is a large task.
+4. **Wayland**: get the Wayland build run on GNOME and KDE; HiDPI (fractional scale) and
+   packaging it (.deb / AppImage) are open.
 5. **Robustness**: fuzz `meta.asm` (tag parsers are hand-written assembly
    reading untrusted files) and the cover decode path. Add the findings to
    `tests/`.

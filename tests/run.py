@@ -1436,6 +1436,260 @@ def stress_valgrind():
     return "no errors"
 
 
+# ---------------------------------------------------------------------- Wayland
+# The Wayland build (build/peep-wayland) on a real compositor: sway, headless. tests/wl.py
+# plays the user through a virtual pointer and keyboard, and drags as a file manager does.
+PEEP_WL = Path(os.environ.get("PEEP_WL_BIN") or ROOT / "build" / "peep-wayland")
+XRD = BUILD / "xrd"
+
+
+PEEP_WL_BARE = BUILD / "peep-wayland-bare"
+
+
+def bare_build():
+    """peep-wayland assembled to ignore the decoration and cursor-shape protocols, as on a
+    compositor that has neither (GNOME): no title bar, so Peep's own resize borders and arrow."""
+    src = ROOT / "src" / "wayland.asm"
+    if not PEEP_WL_BARE.exists() or PEEP_WL_BARE.stat().st_mtime < max(src.stat().st_mtime, PEEP_WL.stat().st_mtime):
+        obj = BUILD / "wayland_bare.o"
+        subprocess.run(["nasm", "-f", "elf64", "-DBARE", "-I" + str(ROOT / "src") + "/", str(src),
+                        "-o", str(obj)], check=True)
+        b = ROOT / "build"
+        subprocess.run(["gcc", "-no-pie", "-o", str(PEEP_WL_BARE), str(obj),
+                        *[str(b / (n + ".o")) for n in ("core", "meta", "gfx", "linux_wl", "dec", "flac",
+                                                        "wav", "wavc", "codecs")],
+                        "-lasound", "-lm"], check=True)
+    return PEEP_WL_BARE
+
+
+class Wayland:
+    def __init__(self, args, binary=None):
+        need("sway", "grim")
+        if not PEEP_WL.exists():
+            raise Skip("no build/peep-wayland (make wayland)")
+        binary = binary or PEEP_WL
+        shutil.rmtree(XRD, ignore_errors=True)
+        XRD.mkdir(parents=True, mode=0o700)
+        cfg = XRD / "sway.cfg"
+        cfg.write_text('output HEADLESS-1 resolution 1600x1200\n'
+                       'for_window [app_id="peep"] floating enable%s\n'
+                       'for_window [app_id="peepsrc"] floating enable, move position 0 0\n' % (", border none" if binary != PEEP_WL else ""))
+        self.env = env(XDG_RUNTIME_DIR=str(XRD), WLR_BACKENDS="headless", WLR_RENDERER="pixman",
+                       WLR_LIBINPUT_NO_DEVICES="1")
+        self.env.pop("DISPLAY", None)
+        self.env.pop("WAYLAND_DISPLAY", None)
+        quiet = dict(stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        noshim = {k: v for k, v in self.env.items() if k != "LD_PRELOAD"}
+        self.procs = [subprocess.Popen(["sway", "-c", str(cfg)], env=noshim, **quiet)]
+        try:
+            for _ in range(100):
+                socks = [f for f in XRD.glob("wayland-*") if not f.name.endswith(".lock")]
+                if socks and list(XRD.glob("sway-ipc*")):
+                    break
+                time.sleep(0.05)
+            else:
+                raise Skip("sway did not start (headless)")
+            time.sleep(0.5)                          # until all its globals are up
+            self.env["WAYLAND_DISPLAY"] = noshim["WAYLAND_DISPLAY"] = socks[0].name
+            noshim["SWAYSOCK"] = str(next(XRD.glob("sway-ipc*")))
+            self.noshim = noshim
+            reset_logs()
+            self.peep = subprocess.Popen([str(binary), *map(str, args)], env=self.env, **quiet)
+            self.procs.append(self.peep)
+            self.user = subprocess.Popen([sys.executable, str(TESTS / "wl.py")], env=noshim, text=True,
+                                         stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                         start_new_session=True)
+            self.procs.append(self.user)
+            assert self.user.stdout.readline().startswith("ok"), "tests/wl.py did not start"
+            for _ in range(60):
+                if self.geo():
+                    break
+                time.sleep(0.05)
+            else:
+                raise AssertionError("Peep's window did not appear")
+            time.sleep(0.4)
+        except BaseException:
+            self.close()
+            raise
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        self.close()
+
+    def close(self):
+        for p in reversed(self.procs):
+            try:
+                os.killpg(p.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            p.wait()
+
+    def do(self, cmd, wait=0.35):
+        """One command for tests/wl.py, then time for Peep to react."""
+        self.user.stdin.write(cmd + "\n")
+        self.user.stdin.flush()
+        r = self.user.stdout.readline().strip()
+        assert r.startswith("ok"), "wl.py %s: %s" % (cmd, r or "died")
+        time.sleep(wait)
+        return r
+
+    def geo(self):
+        """Peep's window: (x, y, w, h, fullscreen) of its contents, or None."""
+        tree = json.loads(subprocess.run(["swaymsg", "-t", "get_tree"], env=self.noshim,
+                                         capture_output=True, text=True).stdout or "{}")
+
+        def walk(n):
+            if n.get("app_id") == "peep":
+                r, w = n["rect"], n["window_rect"]
+                return r["x"] + w["x"], r["y"] + w["y"], w["width"], w["height"], n["fullscreen_mode"]
+            for c in n.get("nodes", []) + n.get("floating_nodes", []):
+                g = walk(c)
+                if g:
+                    return g
+        return walk(tree)
+
+    def shot(self, cursor=False):
+        data = subprocess.run(["grim", *(["-c"] if cursor else []), "-t", "ppm", "-"], env=self.noshim, capture_output=True).stdout
+        head = data.split(b"\n", 3)
+        w, h = map(int, head[1].split())
+        return w, h, head[3]
+
+    def view(self):
+        """The pixels of Peep's window, without the compositor's frame around it."""
+        x, y, ww, hh, _ = self.geo()
+        w, h, px = self.shot()
+        return b"".join(px[(r * w + x) * 3:(r * w + x + ww) * 3] for r in range(y, y + hh))
+
+    def colour(self, at=None):
+        """The colour at a screen point (default: the middle of Peep's window), by name."""
+        if at is None:
+            x, y, w, h, _ = self.geo()
+            at = (x + w // 2, y + h // 2)
+        w, h, px = self.shot()
+        r, g, b = px[(at[1] * w + at[0]) * 3:][:3]
+        if max(r, g, b) < 40:
+            return "black"
+        return {r: "red", g: "green", b: "blue"}[max(r, g, b)]
+
+
+def shape(g):
+    return g[2] / g[3]
+
+
+@check
+def wayland_keys():
+    """Wayland build on sway: every key works, found in the keymap by name (also on AZERTY); the window takes each cover's shape; fullscreen and back; Q quits."""
+    with Wayland([album_dir()]) as w:
+        g = w.geo()
+        assert abs(shape(g) - 1) < 0.01 and g[3] > 900, "first cover 1400x1400, window %dx%d" % g[2:4]
+        seen = [w.colour()]
+        for k in ("n", "Next", "p", "Prior"):
+            w.do("key " + k)
+            seen.append(w.colour())
+        assert seen == ["red", "green", "blue", "green", "red"], "covers shown: %s" % seen
+        w.do("key n")
+        g = w.geo()
+        assert abs(shape(g) - 1.4) < 0.01, "cover 1400x1000, window %dx%d" % g[2:4]
+        w.do("key S-Tab")
+        assert w.colour() == "black", "Shift+Tab did not blank the window"
+        w.do("key S-Tab")
+        assert w.colour() == "green", "Shift+Tab did not bring the cover back"
+        w.do("key f", 0.6)
+        g = w.geo()
+        assert g[4] == 1 and g[2:4] == (1600, 1200), "F: not fullscreen (%s)" % (g,)
+        assert w.colour((800, 20)) == "black" and w.colour((800, 600)) == "green", "fullscreen frame is wrong"
+        w.do("key Escape", 0.6)
+        g = w.geo()
+        assert g[4] == 0 and abs(shape(g) - 1.4) < 0.01, "Escape: %s" % (g,)
+        w.do("key Escape")
+        assert w.geo()[4] == 0, "Escape outside fullscreen did something"
+        # a held key repeats (on Wayland that is the client's job): one P restarts the
+        # track or goes back one, a held P reaches the first
+        w.do("hold p 1500")
+        assert w.colour() == "red", "a held key did not repeat"
+        if have("xkbcli"):
+            w.do("layout fr", 0.5)        # AZERTY: Q is where A is on QWERTY
+            w.do("key n")
+            assert w.colour() == "green", "N not found on the fr layout"
+            w.do("key a")                 # the key that is Q on QWERTY
+            assert w.peep.poll() is None, "the QWERTY position of Q quit on AZERTY"
+        w.do("key q")
+        assert w.peep.wait(timeout=2) == 0, "Q did not quit"
+    return "keys, cover shapes, fullscreen, quit"
+
+
+@check
+def wayland_pointer():
+    """Wayland build on sway: controls show only under the pointer and go when it leaves; a click on the art drags the window; in fullscreen the controls return on movement."""
+    with Wayland([album_dir()]) as w:
+        x, y, ww, hh, _ = w.geo()
+        low = (x + ww // 2, y + hh - hh // 8)       # in the controls
+        w.do("ptr 5 5")
+        w.do("key Tab", 0.8)
+        assert w.colour(low) == "red", "controls visible with the pointer outside"
+        off = w.view()
+        w.do("ptr %d %d" % (x + ww // 2, y + hh // 2))
+        on = w.view()
+        diff = sum(1 for i in range(0, len(on), 997) if on[i] != off[i])
+        assert diff > 20, "controls not shown with the pointer inside"
+        w.do("ptr 5 5", 0.9)
+        assert w.view() == off, "controls did not go away when the pointer left"
+        # drag the window by the art
+        w.do("ptr %d %d" % (x + ww // 2, y + hh // 3))
+        w.do("down", 0.2)
+        w.do("ptr %d %d" % (x + ww // 2 - 150, y + hh // 3 + 40), 0.2)
+        w.do("up")
+        g = w.geo()
+        assert (g[0], g[1]) == (x - 150, y + 40), "window at %s after a drag from %s" % (g[:2], (x, y))
+        # fullscreen: controls fade after 2 s of stillness, return on movement
+        w.do("key f", 0.6)
+        w.do("ptr 800 600", 3.2)
+        still = w.view()
+        w.do("ptr 810 610", 0.3)
+        moved = w.view()
+        diff = sum(1 for i in range(0, len(still), 997) if still[i] != moved[i])
+        assert diff > 20, "fullscreen: controls did not return on movement"
+        assert w.peep.poll() is None, "Peep died"
+    return "hover, window drag, fullscreen controls and pointer"
+
+
+@check
+def wayland_bare():
+    """Wayland build on a compositor that draws no title bar and names no cursors: Peep sets its own arrow, and dragging a border resizes the window in the cover's shape."""
+    with Wayland([album_dir() / "t1.mp3"], bare_build()) as w:      # a 1400x1000 cover
+        x, y, ww, hh, _ = w.geo()
+        w.do("ptr %d %d" % (x + ww // 2, y + hh // 2))
+        w.do("ptr %d %d" % (x + ww - 2, y + hh // 2))
+        w.do("down", 0.2)
+        for i in range(1, 6):
+            w.do("ptr %d %d" % (x + ww - 2 - 80 * i, y + hh // 2), 0.05)
+        w.do("up")
+        g = w.geo()
+        assert abs(g[2] - (ww - 400)) <= 4, "width %d after dragging the right border in by 400 (was %d)" % (g[2], ww)
+        assert abs(shape(g) - 1.4) < 0.01, "resized to %dx%d, not the cover's shape" % g[2:4]
+        assert w.colour() == "green" and w.peep.poll() is None
+    return "own arrow, border resize %dx%d -> %dx%d" % (ww, hh, g[2], g[3])
+
+
+@check
+def wayland_drop():
+    """Wayland build on sway: a file dragged onto the window (text/uri-list, as a file manager sends it, %-escapes and all) replaces the queue and plays."""
+    with Wayland([album_dir() / "t0.mp3"]) as w:
+        assert w.colour() == "red"
+        x, y, ww, hh, _ = w.geo()
+        spaced = ASSETS / "drop me.mp3"
+        shutil.copy(album_dir() / "t2.mp3", spaced)
+        r = w.do("drag %d %d file://%s" % (x + ww // 2, y + hh // 2,
+                                             str(spaced).replace(" ", "%20")), 0.8)
+        assert "sent" in r, "the drop was not accepted (%s)" % r
+        assert w.colour() == "blue", "the dropped file's cover is not shown"
+        r = w.do("drag %d %d file://%s" % (x + ww // 2, y + hh // 2, album_dir()), 0.8)
+        assert w.colour() == "red", "a dropped folder did not play from its first track"
+    return "file and folder drops play"
+
+
 # ----------------------------------------------------------------------- driver
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])

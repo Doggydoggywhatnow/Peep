@@ -48,6 +48,10 @@ missing); the exit code is 1 if anything fails.
 | `wavc_play` | Peep itself (not just the decoder) plays A-law, mu-law, IMA and Microsoft ADPCM WAV sample for sample as the decoder gives them (needs ffmpeg) |
 | `flac_decoder` | the native FLAC decoder against ground truth: 120 random streams using every feature of the format, with seeks (needs numpy) |
 | `decoder_fuzz` | 100,000 mutated WAV/FLAC inputs with guard pages around every buffer: no out-of-bounds read or write (needs numpy) |
+| `wayland_keys` | the Wayland build on a real compositor (sway, headless): every key works on a keymap that puts them on made-up key codes and on AZERTY (found by name, not position), a held key repeats, the window takes each cover's size and shape, fullscreen and back, Q quits (needs sway and grim; xkbcli for AZERTY) |
+| `wayland_pointer` | Wayland: controls show only under the pointer and leave no trace, a click on the art drags the window, fullscreen controls return on movement |
+| `wayland_drop` | Wayland: a file (with %-escapes) and a folder dragged onto the window from another client, as a file manager does, replace the queue and play |
+| `wayland_bare` | Wayland on a compositor with no title bars and no named cursors (stood in for by a test build that ignores those protocols): dragging a border resizes the window in the cover's shape |
 | `stress_valgrind` | rapid skipping and fullscreen toggling cause no memory errors |
 
 ## Groups

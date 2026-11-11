@@ -14,6 +14,7 @@ extern core_take_info, core_target_size, core_note_size, core_art_aspect
 extern core_next_wake, core_click, core_hover, core_tick_needed
 extern core_set_fullscreen, core_motion, core_cursor_hidden
 
+%ifndef WAYLAND
 extern XOpenDisplay, XDefaultScreen, XRootWindow, XCreateSimpleWindow
 extern XStoreName, XSetClassHint, XSelectInput, XInternAtoms, XSetWMProtocols
 extern XChangeProperty, XMapWindow, XConnectionNumber, XPending, XNextEvent
@@ -24,6 +25,7 @@ extern XUndefineCursor, XResizeWindow, XSetWMNormalHints, XDisplayWidth
 extern XDisplayHeight, XSetWindowBackgroundPixmap
 extern XUngrabPointer
 extern XSyncQueryExtension, XSyncInitialize, XSyncCreateCounter, XSyncSetCounter
+%endif
 extern snd_pcm_open, snd_pcm_set_params, snd_pcm_writei, snd_pcm_recover
 extern snd_pcm_drop, snd_pcm_prepare, snd_pcm_drain, snd_pcm_close, snd_pcm_delay
 extern snd_pcm_avail_update, snd_pcm_wait, snd_pcm_state, snd_pcm_rewindable, snd_pcm_rewind
@@ -34,7 +36,11 @@ extern pthread_attr_init, pthread_attr_setstacksize
 %endif
 extern pipe2, read, getenv, clock_gettime
 
+%ifndef WAYLAND
 global main
+%else
+global start_player, parse_uris, wake_fd, wake_buf
+%endif
 global plat_audio_open, plat_audio_write, plat_audio_flush, plat_audio_close
 global plat_audio_queued, plat_audio_wait, plat_audio_rewind
 global plat_map, plat_unmap, plat_sleep, plat_title, plat_cmp
@@ -174,10 +180,11 @@ ts          resq 2
 section .text
 
 ; ============================================================================
-; main
+; start_player(argc, argv): the wake pipe, the player thread and the files
+; given on the command line. Shared by the X11 and Wayland builds.
 ; ============================================================================
-FUNC main, 16
-    ARGS r12, r13                      ; argc, argv
+FUNC start_player, 0
+    ARGS r12, r13
     ; Start playing first: the player thread opens the audio device (tens of
     ; ms with PipeWire / PulseAudio) and the first track, and a worker
     ; decodes its cover, while this thread connects to X and builds the
@@ -212,6 +219,17 @@ FUNC main, 16
     mov  A1, r14
     call core_publish
 .noargs:
+    RET_
+
+%ifndef WAYLAND
+; ============================================================================
+; main (X11; the Wayland build's is in wayland.asm)
+; ============================================================================
+FUNC main, 16
+    ARGS r12, r13                      ; argc, argv
+    mov  A1, r12
+    mov  A2, r13
+    call start_player
     xor  A1, A1
     call XOpenDisplay
     test rax, rax
@@ -970,6 +988,8 @@ FUNC start_move, 0
     call XFlush
     RET_
 
+%endif ; !WAYLAND
+
 ; ============================================================================
 ; drop payload: text/uri-list -> playlist
 ; ============================================================================
@@ -1319,6 +1339,7 @@ FUNC plat_sleep, 0
     RET_
 
 
+%ifndef WAYLAND
 ; apply_size(): follow the cover's shape (aspect hint) and size
 ; apply_size() -> eax 1 if the window was resized to tsz
 FUNC apply_size, 0
@@ -1371,6 +1392,8 @@ FUNC apply_size, 0
     RET_
 .r: xor  eax, eax
     RET_
+
+%endif
 
 FUNC plat_wake, 0
     mov  A1d, [wake_fd + 4]

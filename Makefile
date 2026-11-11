@@ -4,6 +4,7 @@
 #   make exe        Windows binary build/Peep.exe   (mingw-w64 cross compiler)
 #   make appimage   build/Peep-x86_64.AppImage
 #   make deb        build/peep_<version>_amd64.deb (Debian / Ubuntu package)
+#   make wayland  build/peep-wayland: the same program for Wayland (no X11 needed)
 #   make pure       Linux, zero C: native WAV decoder only
 #   make musl       build/peep-musl for musl Linux (Void, Alpine); needs musl-gcc
 #   make test       run the test suite (tests/README.md)
@@ -25,7 +26,7 @@ VERSION := $(shell sed -n '1s/^# Peep //p' README.md)
 VERFLAG = -DPEEP_VERSION='"$(VERSION)"'
 CORE_DEPS := src/abi.inc src/font.inc
 
-.PHONY: linux exe pure musl appimage deb test all clean
+.PHONY: linux wayland exe pure musl appimage deb test all clean
 linux: $(B)/peep
 
 $(B):
@@ -65,6 +66,18 @@ $(B)/peep-pure: $(B)/core_pure.o $(B)/meta.o $(B)/gfx_pure.o $(B)/linux.o $(B)/d
 	$(CC) -no-pie -s -Wl,--as-needed -o $@ $^ -lX11 -lXext -lasound
 pure: $(B)/peep-pure
 
+# ---- Wayland ---------------------------------------------------------------
+# A build of its own: src/wayland.asm is the window (it speaks the Wayland
+# protocol itself, so no libwayland, libxkbcommon or X11), and linux.asm with
+# -DWAYLAND is everything else (audio, files, threads). build/peep is X11.
+$(B)/linux_wl.o: src/linux.asm src/abi.inc | $(B)
+	$(NASM) -f elf64 -DWAYLAND -Isrc/ $< -o $@
+$(B)/wayland.o: src/wayland.asm src/abi.inc | $(B)
+	$(NASM) -f elf64 -Isrc/ $< -o $@
+$(B)/peep-wayland: $(B)/core.o $(B)/meta.o $(B)/gfx.o $(B)/linux_wl.o $(B)/wayland.o $(B)/dec.o $(B)/flac.o $(B)/wav.o $(B)/wavc.o $(B)/codecs.o
+	$(CC) -no-pie -s -Wl,--as-needed -Wl,--gc-sections -o $@ $^ -lasound -lm
+wayland: $(B)/peep-wayland
+
 # ---- musl Linux (Void, Alpine) -----------------------------------------------
 # The same program linked with musl-gcc, so it asks for musl's loader instead of
 # glibc 2.34. Building needs no musl copy of libX11 or libasound: empty stand-ins
@@ -92,7 +105,11 @@ $(M)/codecs.o: src/codecs.c | $(M)
 	$(MUSLCC) $(CODEC_CFLAGS_LINUX) -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0 -c $< -o $@
 $(B)/peep-musl: $(B)/core.o $(B)/meta.o $(B)/gfx.o $(M)/linux.o $(B)/dec.o $(B)/flac.o $(B)/wav.o $(B)/wavc.o $(M)/codecs.o $(M)/libX11.so.6 $(M)/libXext.so.6 $(M)/libasound.so.2
 	$(MUSLCC) -no-pie -s -Wl,--as-needed -Wl,--gc-sections -o $@ $^ -lm
-musl: $(B)/peep-musl
+$(M)/linux_wl.o: src/linux.asm src/abi.inc | $(M)
+	$(NASM) -f elf64 -DMUSL -DWAYLAND -Isrc/ $< -o $@
+$(B)/peep-wayland-musl: $(B)/core.o $(B)/meta.o $(B)/gfx.o $(M)/linux_wl.o $(B)/wayland.o $(B)/dec.o $(B)/flac.o $(B)/wav.o $(B)/wavc.o $(M)/codecs.o $(M)/libasound.so.2
+	$(MUSLCC) -no-pie -s -Wl,--as-needed -Wl,--gc-sections -o $@ $^ -lm
+musl: $(B)/peep-musl $(B)/peep-wayland-musl
 
 # ---- Windows ---------------------------------------------------------------
 $(B)/core.obj: src/core.asm $(CORE_DEPS) | $(B)
@@ -155,10 +172,10 @@ $(DEB): $(B)/peep res/peep.desktop res/peep.png res/copyright CHANGELOG.md
 deb: $(DEB)
 
 # ---- Tests -----------------------------------------------------------------
-test: $(B)/peep
+test: $(B)/peep $(B)/peep-wayland
 	python3 tests/run.py
 
-all: linux pure exe appimage deb
+all: linux wayland pure exe appimage deb
 
 clean:
 	rm -rf $(B)

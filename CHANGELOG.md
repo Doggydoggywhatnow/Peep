@@ -2,6 +2,26 @@
 
 All notable changes to Peep.
 
+## 0.6.1
+
+### Added
+- **A Wayland build.** `Peep-0.6.1-x86_64-wayland` is the same player with a native
+  Wayland window, for GNOME, KDE, sway and the rest. It is a separate download; the
+  AppImage, the .deb and the plain musl build are still the X11 program (X.Org, XLibre,
+  XWayland) and are unchanged. Everything works the same: every key (found in your
+  keyboard layout, held keys repeat), controls under the pointer, dragging the window by
+  the cover, fullscreen with the pointer hiding, the window taking each cover's size and
+  shape, and dropping files or folders. It is still assembly: Peep speaks the Wayland
+  protocol itself, so it needs no libwayland, no libxkbcommon and no X11 libraries, only
+  ALSA. Where the compositor offers a title bar (KDE, sway) Peep asks for one; where it
+  does not (GNOME) the window is bare: drag the cover to move it, drag the outer 6 pixels
+  to resize it, Q to close.
+- Build it with `make wayland` (`build/peep-wayland`); `make musl` also builds
+  `build/peep-wayland-musl`.
+- Tests: `wayland_keys`, `wayland_pointer`, `wayland_drop` and `wayland_bare` run the
+  Wayland build on a real compositor (sway, headless) with a virtual keyboard and pointer
+  and a real drag and drop.
+
 ## 0.6.0
 
 ### Changed

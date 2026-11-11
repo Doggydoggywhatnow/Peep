@@ -1,4 +1,4 @@
-# Peep 0.6.0
+# Peep 0.6.1
 
 A music player that is just a screen.
 
@@ -15,10 +15,12 @@ writes to disk.
 
 | Download | Platform |
 |---|---|
-| [`Peep-0.6.0-x86_64.AppImage`](releases/Peep-0.6.0-x86_64.AppImage) | Linux x86-64 |
-| [`peep_0.6.0_amd64.deb`](releases/peep_0.6.0_amd64.deb) | Ubuntu 22.04+ / Debian 12+ (x86-64) |
-| [`Peep-0.6.0.exe`](releases/Peep-0.6.0.exe) | Windows x64 |
-| [`Peep-0.6.0-x86_64-musl`](releases/Peep-0.6.0-x86_64-musl) | Linux x86-64 with musl libc (Void musl, Alpine): one file, `chmod +x` and run |
+| [`Peep-0.6.1-x86_64.AppImage`](releases/Peep-0.6.1-x86_64.AppImage) | Linux x86-64 |
+| [`peep_0.6.1_amd64.deb`](releases/peep_0.6.1_amd64.deb) | Ubuntu 22.04+ / Debian 12+ (x86-64) |
+| [`Peep-0.6.1.exe`](releases/Peep-0.6.1.exe) | Windows x64 |
+| [`Peep-0.6.1-x86_64-wayland`](releases/Peep-0.6.1-x86_64-wayland) | Linux x86-64, **Wayland** (GNOME, KDE, sway, ...): one file, `chmod +x` and run. Needs no X11 |
+| [`Peep-0.6.1-x86_64-wayland-musl`](releases/Peep-0.6.1-x86_64-wayland-musl) | The Wayland build for musl libc |
+| [`Peep-0.6.1-x86_64-musl`](releases/Peep-0.6.1-x86_64-musl) | Linux x86-64 with musl libc (Void musl, Alpine): one file, `chmod +x` and run |
 
 ## Philosophy
 
@@ -137,6 +139,7 @@ src/meta.asm    tag reader: ID3v2/v1, FLAC blocks, Ogg page reassembly,
                 Vorbis comments, base64 pictures, WAV LIST/INFO
 src/gfx.asm     cover scaling (box-filter halving + SSE2 bilinear), overlay,
                 buttons, UTF-8 text layout, font cycling, window sizing
+src/wayland.asm the Wayland build's window: the wire protocol by hand (no libwayland)
 src/linux.asm   X11 window + XDND drag & drop, ALSA, aspect hints, resize sync, fonts dir
 src/win32.asm   Win32 window + WM_DROPFILES, waveOut, WM_SIZING aspect lock
 src/codecs.c    ~150-line shim over public-domain libraries (see below)
