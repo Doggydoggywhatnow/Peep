@@ -2,7 +2,7 @@
 
 All notable changes to Peep.
 
-## Unreleased (freedumb branch)
+## 0.6.0
 
 ### Changed
 - **Newest FLAC decoder from lib-Peep `dev`.** Optimised x86-64 decoder: 8-byte bit
@@ -12,7 +12,7 @@ All notable changes to Peep.
   (same machine, alternating runs). Fixes FLAC files whose STREAMINFO block size is 0
   ("unknown") and seeking in fixed-block-size files whose last block is short.
   `peep_open` also accepts sample rates from 1 Hz (Peep itself still plays 1,000 Hz
-  and up). The code is 38 KB larger in `flac.o`. Version number not bumped yet.
+  and up). The program is larger: 390 KB on Linux (was 382 KB).
 
 ## 0.5.1
 
