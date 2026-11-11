@@ -1018,6 +1018,12 @@ def track_keys():
             if t0 <= t <= t1 and after * 4 + 16 <= len(heard):
                 probe = heard[after * 4: after * 4 + 16]
                 out.append(next(((i, data[i].find(probe) // 4) for i in range(3) if data[i].find(probe) >= 0), None))
+        for t, q, after in REWINDS:           # a cut that took audio back: the next track starts just after the tail
+            if t0 <= t <= t1:
+                window = heard[after * 4: (after + 700) * 4]
+                hit = next((i for i in range(3) if window.find(data[i][:16]) >= 0), None)
+                if hit is not None:
+                    out.append((hit, 0))
         return out
     first = landed(marks["NEXT"], marks["PREV"] - 1)
     assert first and first[-1] == (1, 0), "Next did not start track 2 from its beginning: %s" % first
